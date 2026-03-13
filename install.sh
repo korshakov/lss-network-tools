@@ -2,17 +2,18 @@
 set -e
 set -o pipefail
 
-SCRIPT_NAME="lss-macos-network-tools"
-TARGET="/usr/local/bin/lss-macos-network-tools"
-ALIAS="/usr/local/bin/lss"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-chmod +x "$SCRIPT_NAME"
-
-sudo cp "$SCRIPT_NAME" "$TARGET"
-sudo ln -sf "$TARGET" "$ALIAS"
-
-echo "Installed successfully."
-echo "Run the tool using:"
-echo "  lss-macos-network-tools"
-echo "or simply:"
-echo "  lss"
+case "$(uname)" in
+  Darwin)
+    exec "$SCRIPT_DIR/install/install-macos.sh"
+    ;;
+  Linux)
+    exec "$SCRIPT_DIR/install/install-linux.sh"
+    ;;
+  *)
+    echo "Unsupported operating system: $(uname)"
+    echo "Supported operating systems are macOS (Darwin) and Linux."
+    exit 1
+    ;;
+esac
