@@ -708,6 +708,53 @@ scan_file_servers() {
   done <<< "$parsed_results"
 }
 
+scan_printers() {
+  local net scan_output parsed_results
+  net="$(get_network)"
+
+  echo
+  echo "Scanning network for printers..."
+  scan_output="$(nmap -p 80,443,515,631,9100 --open "$net" 2>/dev/null || true)"
+
+  parsed_results="$(echo "$scan_output" | awk '
+    /^Nmap scan report for / { ip=$NF; next }
+    /^[0-9]+\/tcp[[:space:]]+open/ {
+      split($1, p, "/")
+      print ip "|" p[1]
+    }
+  ')"
+
+  if [[ -z "$parsed_results" ]]; then
+    echo "No printers discovered on the network."
+    return
+  fi
+
+  echo
+  echo "## Printers Discovered"
+  echo
+
+  while IFS='|' read -r ip port; do
+    local service_name
+    [[ -z "$ip" || -z "$port" ]] && continue
+
+    case "$port" in
+      80) service_name="Printer Web Interface" ;;
+      443) service_name="Secure Printer Interface" ;;
+      515) service_name="LPD Printer Service" ;;
+      631) service_name="IPP Printer Service" ;;
+      9100) service_name="JetDirect Printer Port" ;;
+      *) service_name="Unknown Printer Service" ;;
+    esac
+
+    echo "IP: $ip"
+    echo "Port: $port"
+    echo "Service: $service_name"
+    echo
+    echo "---"
+    echo
+  done <<< "$parsed_results"
+}
+
 exit_script() {
   echo
   read -r -p "Export session report to Desktop? (y/n) " exp
@@ -755,6 +802,7 @@ echo "4) Find Web Admin Interfaces"
 echo "5) Internet Speed Test"
 echo "6) Scan for DNS servers"
 echo "7) Scan for File Servers"
+echo "8) Scan for Printers"
 
 echo
 echo "0) Exit"
@@ -781,6 +829,7 @@ main() {
       5) speed_test ;;
       6) scan_dns_servers ;;
       7) scan_file_servers ;;
+      8) scan_printers ;;
       0) exit_script ;;
       *) print_warn "Invalid option." ;;
     esac
