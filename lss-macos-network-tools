@@ -888,23 +888,90 @@ exit_script() {
 }
 
 export_report() {
-  local date_stamp generated gateway dest
+  local date_stamp generated gateway ip_addr dest clean_log
   date_stamp="$(date '+%Y-%m-%d_%H-%M-%S')"
   generated="$(date '+%Y-%m-%d %H:%M:%S')"
   gateway="$(get_gateway)"
+  ip_addr="$(ipconfig getifaddr "$IF" 2>/dev/null || echo "N/A")"
   dest="$HOME/Desktop/LSS-NetInfo-Export-$date_stamp.txt"
+  clean_log="$(mktemp)"
+
+  if sed -r '' </dev/null >/dev/null 2>&1; then
+    sed -r 's/\x1B\[[0-9;]*[mK]//g' "$LOGFILE"
+  else
+    sed -E 's/\x1B\[[0-9;]*[mK]//g' "$LOGFILE"
+  fi | sed -E '/^## Running scan\.\.\.$/d; /^## Scan complete$/d; /^Running .*\.\.\.$/d; /^Running Internet speed test$/d; /^Running Internet speed test complete$/d; /^Starting Nmap/d; /^Pre-scan script results:/d; /^Scanning network/d; /^Discovering active hosts\.\.\.$/d; /^Checking [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\.\.\.$/d; /^Testing https?:\/\//d; /^---$/d; /^-+$/d' > "$clean_log"
 
   {
-    echo "LSS NetInfo Report"
+    echo "========================================"
+    echo "LSS Network Diagnostic Report"
+    echo "========================================"
     echo "Generated: $generated"
     echo "Interface: $IF"
-    echo "-----------------------------------"
-    if sed -r '' </dev/null >/dev/null 2>&1; then
-      cat "$LOGFILE" | sed -r 's/\x1B\[[0-9;]*[mK]//g'
-    else
-      cat "$LOGFILE" | sed -E 's/\x1B\[[0-9;]*[mK]//g'
-    fi | sed '/^## Running scan\.\.\.$/d; /^## Scan complete$/d; /^Running .*\.\.\.$/d; /^Scanning network /d; /^---$/d; /^----------------------------------------$/d'
+    echo "IP address: $ip_addr"
+    echo "Gateway: ${gateway:-N/A}"
+    echo ""
+
+    awk '
+      function print_section(title) {
+        if (current_section != title) {
+          if (printed_any) print ""
+          print "========================================"
+          print title
+          print "========================================"
+          current_section = title
+          printed_any = 1
+          seen_device = 0
+        }
+      }
+
+      function emit(line) {
+        if (line == "" || line == prev_line) return
+        print line
+        prev_line = line
+      }
+
+      {
+        gsub(/\r/, "", $0)
+        if ($0 ~ /^[[:space:]]*$/) next
+
+        if ($0 ~ /^## Gateway Scan Results/) { print_section("Gateway"); next }
+        if ($0 ~ /^## Web Management Interfaces/) { print_section("Web Management Interfaces"); next }
+        if ($0 ~ /^## DNS Servers Discovered/) { print_section("DNS Servers"); next }
+        if ($0 ~ /^## File Servers Discovered/) { print_section("File Servers"); next }
+        if ($0 ~ /^## Printers Discovered/) { print_section("Printers"); next }
+
+        if ($0 ~ /Speedtest by Ookla/ || $0 ~ /^Server:/ || $0 ~ /^ISP:/ || $0 ~ /^Download:/ || $0 ~ /^Upload:/ || $0 ~ /^Latency:/) {
+          print_section("Speed Test")
+        }
+
+        if (current_section == "") next
+
+        if ($0 ~ /^Open Services:$/ || $0 ~ /^No open services found\.$/) { emit($0); next }
+        if ($0 ~ /^Gateway: /) { emit($0); next }
+
+        if ($0 ~ /^IP: /) {
+          ip = $0
+          sub(/^IP:[[:space:]]*/, "", ip)
+          if (seen_device) emit("----------------------------------------")
+          emit(ip)
+          seen_device = 1
+          next
+        }
+
+        if ($0 ~ /^https?:\/\//) { emit("  URL: " $0); next }
+
+        if ($0 ~ /^(Port|Status|Service|Model|Latency|Recursion|Potential Rogue DNS): /) {
+          emit("  " $0)
+          next
+        }
+
+        emit($0)
+      }
+    ' "$clean_log"
   } > "$dest"
+
+  rm -f "$clean_log"
 
   print_ok "Export saved to: $dest"
 }
