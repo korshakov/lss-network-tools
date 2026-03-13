@@ -1,33 +1,31 @@
 # LSS macOS Network Tools
 
-![Platform](https://img.shields.io/badge/platform-macOS-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-1.0.0-orange)
-
-## Project description
-LSS macOS Network Tools is a Bash-based CLI utility for professional network diagnostics and audit workflows on macOS. It helps engineers quickly inspect interface configuration, discover devices, run gateway and LAN scans, validate DHCP behavior, and export session reports for documentation.
+## Overview
+LSS macOS Network Tools is a menu-driven CLI utility for professional network engineers performing on-site audits on macOS. It combines common diagnostics workflows (discovery, gateway scanning, DHCP review, topology summarization, and reporting) into one script.
 
 ## Features
-- Dependency checks for `brew`, `nmap`, `arp-scan`, and `speedtest-cli`
-- One-time `sudo` credential validation for smoother scan workflows
-- Filtered interface detection to focus on real network adapters
-- Device discovery with `arp-scan`
-- Gateway reconnaissance and fingerprinting with `nmap`
-- Rogue DHCP discovery script checks
-- Local network mapping and service checks
-- Internet speed testing with `speedtest-cli`
-- Exportable session report with metadata header
-- Built-in version flag: `--version`
+- Automatic dependency check on every run (`brew`, `nmap`, `arp-scan`, `speedtest-cli`)
+- Optional automatic installation of missing dependencies through Homebrew
+- Automatic GitHub release check with in-place update option
+- Interface selection that filters out non-usable interfaces (Bluetooth PAN, Thunderbolt Bridge, AWDL, P2P)
+- Device discovery with vendor detection from nmap MAC OUI mapping
+- Gateway port scan and fingerprint scan
+- Rogue DHCP detection
+- Web admin interface discovery
+- Remote access service detection
+- Internet speed testing
+- Network topology summary with vendor-based category breakdown
+- Session logging and Desktop report export
 
 ## Requirements
-- macOS Ventura, Sonoma, or Sequoia
+- macOS
 - Homebrew
-- nmap
-- arp-scan
-- speedtest-cli
+- `nmap`
+- `arp-scan`
+- `speedtest-cli`
 
 ## Installation
-### Run from repository
+### Clone and run from source
 ```bash
 git clone https://github.com/korshakov/lss-macos-network-tools.git
 cd lss-macos-network-tools
@@ -35,17 +33,24 @@ chmod +x lss-macos-network-tools
 ./lss-macos-network-tools
 ```
 
-### System installation
+### Install as a system command
 ```bash
 sudo ./install.sh
 ```
 
-After installation, run:
+Then run:
 ```bash
 lss
 ```
 
+### Homebrew installation
+You can install via a custom tap/formula path in this repository:
+```bash
+brew install ./homebrew-tools/Formula/lss-macos-network-tools.rb
+```
+
 ## Usage
+Run from repository:
 ```bash
 ./lss-macos-network-tools
 ```
@@ -55,20 +60,35 @@ Show version:
 ./lss-macos-network-tools --version
 ```
 
-Installed command:
+Run installed command:
 ```bash
 lss
 ```
 
 ## Export reports
-When exiting the tool, choose report export to save a timestamped report on the Desktop using this naming format:
+On exit, the script asks:
 
-`LSS-NetInfo-Export-YYYY-MM-DD_HH-MM-SS.txt`
+`Export session report to Desktop? (y/n)`
 
-Each report includes metadata at the top:
+If accepted, a report is created at:
+
+`~/Desktop/LSS-NetInfo-Export-YYYY-MM-DD_HH-MM-SS.txt`
+
+The report contains:
+- Report title
 - Generated timestamp
 - Selected interface
 - Detected gateway
+- Full logged session output
+
+## Updating
+The script checks for the latest GitHub release at startup using:
+
+`https://api.github.com/repos/korshakov/lss-macos-network-tools/releases/latest`
+
+If a newer version is available, it prompts to download and install the update, then restarts automatically.
 
 ## License
-This project is licensed under the MIT License. See [LICENSE](LICENSE).
+MIT License (Copyright © 2026 LS Solutions).
+
+Use this tool only on networks you own or have permission to audit.
