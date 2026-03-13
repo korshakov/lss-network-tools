@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -e
 set -o pipefail
 
@@ -90,7 +90,27 @@ run_dependency_check() {
 }
 
 version_gt() {
-  [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" == "$1" && "$1" != "$2" ]]
+  local IFS=.
+  local i
+  local -a v1=($1) v2=($2)
+
+  for ((i=${#v1[@]}; i<${#v2[@]}; i++)); do
+    v1[i]=0
+  done
+  for ((i=${#v2[@]}; i<${#v1[@]}; i++)); do
+    v2[i]=0
+  done
+
+  for ((i=0; i<${#v1[@]}; i++)); do
+    if ((10#${v1[i]} > 10#${v2[i]})); then
+      return 0
+    fi
+    if ((10#${v1[i]} < 10#${v2[i]})); then
+      return 1
+    fi
+  done
+
+  return 1
 }
 
 check_for_updates() {
@@ -180,7 +200,10 @@ select_interface() {
     echo " Select Network Interface"
     echo "================================="
 
-    mapfile -t interfaces < <(get_interfaces)
+    interfaces=()
+    while IFS= read -r line; do
+      interfaces+=("$line")
+    done < <(get_interfaces)
 
     if [[ ${#interfaces[@]} -eq 0 ]]; then
       print_alert "No usable network interfaces found."
