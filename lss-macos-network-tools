@@ -598,6 +598,68 @@ speed_test() {
   run_scan "Running Internet speed test" "speedtest-cli"
 }
 
+scan_dns_servers() {
+  local net gw scan_output discovered_hosts ip dns_short dns_stats latency recursion rogue status
+  net="$(get_network)"
+  gw="$(get_gateway)"
+
+  if ! command -v dig >/dev/null 2>&1; then
+    print_alert "dig command is required for DNS verification but was not found."
+    return
+  fi
+
+  echo
+  echo "Scanning network for DNS servers..."
+  scan_output="$(nmap -p 53 --open "$net" 2>/dev/null || true)"
+
+  discovered_hosts="$(echo "$scan_output" | awk '/^Nmap scan report for / {print $NF}')"
+
+  if [[ -z "$discovered_hosts" ]]; then
+    echo "No DNS servers discovered on the network."
+    return
+  fi
+
+  echo
+  echo "## DNS Servers Discovered"
+  echo
+
+  while IFS= read -r ip; do
+    [[ -z "$ip" ]] && continue
+
+    dns_short="$(dig @"$ip" google.com +short +time=2 +tries=1 2>/dev/null || true)"
+    dns_stats="$(dig @"$ip" google.com +stats +time=2 +tries=1 2>/dev/null || true)"
+    latency="$(echo "$dns_stats" | awk -F': ' '/^;; Query time:/ {print $2}' | awk '{print $1; exit}')"
+
+    if [[ -n "$dns_short" ]]; then
+      status="Responding"
+      recursion="Enabled"
+    else
+      status="No DNS response"
+      recursion="Disabled"
+    fi
+
+    if [[ "$ip" != "$gw" ]]; then
+      rogue="Yes"
+    else
+      rogue="No"
+    fi
+
+    echo "IP: $ip"
+    echo "Port: 53"
+    echo "Status: $status"
+    if [[ -n "$latency" ]]; then
+      echo "Latency: $latency ms"
+    else
+      echo "Latency: N/A"
+    fi
+    echo "Recursion: $recursion"
+    echo "Potential Rogue DNS: $rogue"
+    echo
+    echo "---"
+    echo
+  done <<< "$discovered_hosts"
+}
+
 exit_script() {
   echo
   read -r -p "Export session report to Desktop? (y/n) " exp
@@ -643,6 +705,7 @@ echo "2) Gateway Scan"
 echo "3) Rogue DHCP Detection"
 echo "4) Find Web Admin Interfaces"
 echo "5) Internet Speed Test"
+echo "6) Scan for DNS servers"
 
 echo
 echo "0) Exit"
@@ -667,6 +730,7 @@ main() {
       3) rogue_dhcp ;;
       4) find_web_interfaces ;;
       5) speed_test ;;
+      6) scan_dns_servers ;;
       0) exit_script ;;
       *) print_warn "Invalid option." ;;
     esac
