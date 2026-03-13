@@ -638,7 +638,7 @@ scan_dns_servers() {
 
   scan_output_file="$(mktemp)"
 
-  nmap -sU -p53 --open --max-retries 1 "$net" > "$scan_output_file" 2>/dev/null &
+  nmap -sU -sT -p53 --open --max-retries 1 "$net" > "$scan_output_file" 2>/dev/null &
   scan_pid=$!
 
   spinner $scan_pid
@@ -754,9 +754,10 @@ scan_file_servers() {
 }
 
 scan_printers() {
-  local net scan_output parsed_results scan_output_file scan_pid
-  declare -A printed has_631
+  local net scan_output parsed_results scan_output_file scan_pid printed_ips has_631_ips
   net="$(get_network)"
+  printed_ips=""
+  has_631_ips=""
 
   log_echo ""
   log_echo "Scanning network for printers..."
@@ -788,7 +789,9 @@ scan_printers() {
   while IFS='|' read -r ip port; do
     [[ -z "$ip" || -z "$port" ]] && continue
     if [[ "$port" == "631" ]]; then
-      has_631[$ip]=1
+      if [[ " $has_631_ips " != *" $ip "* ]]; then
+        has_631_ips="$has_631_ips $ip"
+      fi
     fi
   done <<< "$parsed_results"
 
@@ -799,8 +802,9 @@ scan_printers() {
   while IFS='|' read -r ip port; do
     local service_name model page
     [[ -z "$ip" || -z "$port" ]] && continue
-    [[ -n "${printed[$ip]}" ]] && continue
-    printed[$ip]=1
+    if [[ " $printed_ips " == *" $ip "* ]]; then
+      continue
+    fi
 
     case "$port" in
       515) service_name="LPD Printer Service" ;;
@@ -816,7 +820,7 @@ scan_printers() {
       [[ -z "$model" ]] && model="Unknown"
     fi
 
-    if [[ "$model" == "Unknown" && -n "${has_631[$ip]}" ]]; then
+    if [[ "$model" == "Unknown" && " $has_631_ips " == *" $ip "* ]]; then
       page="$(curl -s --connect-timeout 2 "http://$ip" || true)"
       model="$(echo "$page" | grep -i -E 'hp|brother|canon|epson|xerox|printer' | head -n1 | sed 's/<[^>]*>//g')"
       [[ -z "$model" ]] && model="Unknown"
@@ -828,6 +832,8 @@ scan_printers() {
     log_echo ""
     log_echo "---"
     log_echo ""
+
+    printed_ips="$printed_ips $ip"
   done <<< "$parsed_results"
 }
 
