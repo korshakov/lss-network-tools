@@ -1,5 +1,10 @@
 # LSS Network Tools
 
+```bash
+git clone https://github.com/korshakov/lss-network-tools.git
+cd lss-network-tools
+chmod +x *.sh
+```
 Run the toolkit directly from the repository root:
 
 ```bash
