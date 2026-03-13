@@ -504,139 +504,8 @@ find_web_interfaces() {
   print_warn "Potential management interfaces detected above (yellow lines)."
 }
 
-find_remote_access() {
-  local net
-  net="$(get_network)"
-  run_scan "Scanning for remote access services on $net" "sudo nmap --stats-every 5s -p 22,3389,5900 --open $net"
-}
-
 speed_test() {
   run_scan "Running internet speed test" "speedtest-cli"
-}
-
-build_topology_summary() {
-
-  local net tmp_file total apple printers routers unknown
-
-  net=$(get_network)
-
-  tmp_file=$(mktemp -t lss-topology)
-
-  echo
-  echo "Running topology discovery scan on $net"
-  echo
-
-  sudo nmap -sn "$net" > "$tmp_file"
-
-  total=$(grep -c "Nmap scan report for" "$tmp_file")
-
-  apple=$(grep -Ei "Apple" "$tmp_file" | wc -l | tr -d ' ')
-  printers=$(grep -Ei "HP|Brother|Canon|Epson|Xerox|Lexmark" "$tmp_file" | wc -l | tr -d ' ')
-  routers=$(grep -Ei "Ubiquiti|Cisco|MikroTik|Netgear|TP-Link|ASUS|Juniper" "$tmp_file" | wc -l | tr -d ' ')
-  unknown=$(grep -Ei "Unknown" "$tmp_file" | wc -l | tr -d ' ')
-
-  echo
-  echo "Network Summary"
-  echo "----------------"
-
-  echo "Gateway: $(get_gateway)"
-  echo "Devices detected: ${total:-0}"
-
-  echo
-  echo "Breakdown:"
-  echo "Apple devices: ${apple:-0}"
-  echo "Printers: ${printers:-0}"
-  echo "Routers: ${routers:-0}"
-  echo "Unknown devices: ${unknown:-0}"
-
-  rm -f "$tmp_file"
-
-}
-
-network_health_summary() {
-  local net gw discovery_file mgmt_file remote_file
-  local gateway_reachable internet_reachable devices dhcp_count mgmt_count remote_count unknown_devices
-  net="$(get_network)"
-  gw="$(get_gateway)"
-  discovery_file="$(mktemp /tmp/lss-health-discovery.XXXXXX)"
-  mgmt_file="$(mktemp /tmp/lss-health-mgmt.XXXXXX)"
-  remote_file="$(mktemp /tmp/lss-health-remote.XXXXXX)"
-
-  echo "---" | tee -a "$LOGFILE"
-  print_info "## Running scan..." | tee -a "$LOGFILE"
-  print_info "Running discovery scan..." | tee -a "$LOGFILE"
-  print_info "Scanning network $net" | tee -a "$LOGFILE"
-  sudo nmap -sn "$net" > "$discovery_file" 2>/dev/null || true
-  echo "---" | tee -a "$LOGFILE"
-  print_info "## Scan complete" | tee -a "$LOGFILE"
-
-  run_dhcp_discover_scan
-
-  echo "---" | tee -a "$LOGFILE"
-  print_info "## Running scan..." | tee -a "$LOGFILE"
-  print_info "Running management interface scan..." | tee -a "$LOGFILE"
-  print_info "Scanning network $net" | tee -a "$LOGFILE"
-  sudo nmap --stats-every 5s -p 80,443,8080,8443 --open "$net" > "$mgmt_file" 2>/dev/null || true
-  echo "---" | tee -a "$LOGFILE"
-  print_info "## Scan complete" | tee -a "$LOGFILE"
-
-  echo "---" | tee -a "$LOGFILE"
-  print_info "## Running scan..." | tee -a "$LOGFILE"
-  print_info "Running remote access scan..." | tee -a "$LOGFILE"
-  print_info "Scanning network $net" | tee -a "$LOGFILE"
-  sudo nmap --stats-every 5s -p 22,3389,5900 --open "$net" > "$remote_file" 2>/dev/null || true
-  echo "---" | tee -a "$LOGFILE"
-  print_info "## Scan complete" | tee -a "$LOGFILE"
-
-  if ping -c1 -t1 "$gw" >/dev/null 2>&1; then
-    gateway_reachable="YES"
-  else
-    gateway_reachable="NO"
-  fi
-
-  if ping -c1 -t1 8.8.8.8 >/dev/null 2>&1; then
-    internet_reachable="YES"
-  else
-    internet_reachable="NO"
-  fi
-
-  devices="$(grep -c '^Nmap scan report for ' "$discovery_file" 2>/dev/null || true)"
-  dhcp_count="$(dhcp_server_count)"
-  mgmt_count="$(grep -c '^Nmap scan report for ' "$mgmt_file" 2>/dev/null || true)"
-  remote_count="$(grep -c '^Nmap scan report for ' "$remote_file" 2>/dev/null || true)"
-  unknown_devices="$(grep -Ei 'MAC Address: .*(Unknown)' "$discovery_file" 2>/dev/null | wc -l | tr -d ' ')"
-
-  echo | tee -a "$LOGFILE"
-  echo "## Network Health Summary" | tee -a "$LOGFILE"
-  echo | tee -a "$LOGFILE"
-  echo "Interface: $IF" | tee -a "$LOGFILE"
-  echo "Gateway: ${gw:-N/A}" | tee -a "$LOGFILE"
-  echo | tee -a "$LOGFILE"
-  echo "Gateway reachable: $gateway_reachable" | tee -a "$LOGFILE"
-  echo "Internet reachable: $internet_reachable" | tee -a "$LOGFILE"
-  echo | tee -a "$LOGFILE"
-  echo "Devices discovered: ${devices:-0}" | tee -a "$LOGFILE"
-  echo "DHCP servers detected: ${dhcp_count:-0}" | tee -a "$LOGFILE"
-  echo | tee -a "$LOGFILE"
-  echo "Management interfaces found: ${mgmt_count:-0}" | tee -a "$LOGFILE"
-  echo "Remote access services: ${remote_count:-0}" | tee -a "$LOGFILE"
-
-  if [[ "$dhcp_count" -gt 1 || "$remote_count" -gt 0 || "$unknown_devices" -gt 0 ]]; then
-    echo | tee -a "$LOGFILE"
-    print_alert "Warnings:" | tee -a "$LOGFILE"
-  fi
-
-  if [[ "$dhcp_count" -gt 1 ]]; then
-    print_alert "WARNING: Multiple DHCP servers detected" | tee -a "$LOGFILE"
-  fi
-  if [[ "$remote_count" -gt 0 ]]; then
-    print_alert "WARNING: Remote access services exposed" | tee -a "$LOGFILE"
-  fi
-  if [[ "$unknown_devices" -gt 0 ]]; then
-    print_alert "WARNING: Unknown devices detected" | tee -a "$LOGFILE"
-  fi
-
-  rm -f "$discovery_file" "$mgmt_file" "$remote_file"
 }
 
 export_report() {
@@ -674,10 +543,7 @@ echo "3) Gateway Fingerprint"
 echo "4) Rogue DHCP Detection"
 echo "5) Network Map"
 echo "6) Find Web Admin Interfaces"
-echo "7) Find Remote Access Services"
-echo "8) Internet Speed Test"
-echo "9) Network Topology Summary"
-echo "10) Network Health Summary"
+echo "7) Internet Speed Test"
 
 echo
 echo "0) Exit"
@@ -703,10 +569,7 @@ main() {
       4) rogue_dhcp ;;
       5) network_map ;;
       6) find_web_interfaces ;;
-      7) find_remote_access ;;
-      8) speed_test ;;
-      9) build_topology_summary ;;
-      10) network_health_summary ;;
+      7) speed_test ;;
       0) exit 0 ;;
       *) print_warn "Invalid option." ;;
     esac
