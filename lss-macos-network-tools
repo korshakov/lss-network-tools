@@ -660,6 +660,54 @@ scan_dns_servers() {
   done <<< "$discovered_hosts"
 }
 
+scan_file_servers() {
+  local net scan_output parsed_results
+  net="$(get_network)"
+
+  echo
+  echo "Scanning network for file servers..."
+  scan_output="$(nmap -p 21,22,139,445,2049,548 --open "$net" 2>/dev/null || true)"
+
+  parsed_results="$(echo "$scan_output" | awk '
+    /^Nmap scan report for / { ip=$NF; next }
+    /^[0-9]+\/tcp[[:space:]]+open/ {
+      split($1, p, "/")
+      print ip "|" p[1]
+    }
+  ')"
+
+  if [[ -z "$parsed_results" ]]; then
+    echo "No file servers discovered on the network."
+    return
+  fi
+
+  echo
+  echo "## File Servers Discovered"
+  echo
+
+  while IFS='|' read -r ip port; do
+    local service_name
+    [[ -z "$ip" || -z "$port" ]] && continue
+
+    case "$port" in
+      21) service_name="FTP Server" ;;
+      22) service_name="SSH / SFTP File Access" ;;
+      139) service_name="SMB (NetBIOS)" ;;
+      445) service_name="SMB File Share" ;;
+      2049) service_name="NFS Server" ;;
+      548) service_name="AFP (Apple File Server)" ;;
+      *) service_name="Unknown File Service" ;;
+    esac
+
+    echo "IP: $ip"
+    echo "Port: $port"
+    echo "Service: $service_name"
+    echo
+    echo "---"
+    echo
+  done <<< "$parsed_results"
+}
+
 exit_script() {
   echo
   read -r -p "Export session report to Desktop? (y/n) " exp
@@ -706,6 +754,7 @@ echo "3) Rogue DHCP Detection"
 echo "4) Find Web Admin Interfaces"
 echo "5) Internet Speed Test"
 echo "6) Scan for DNS servers"
+echo "7) Scan for File Servers"
 
 echo
 echo "0) Exit"
@@ -731,6 +780,7 @@ main() {
       4) find_web_interfaces ;;
       5) speed_test ;;
       6) scan_dns_servers ;;
+      7) scan_file_servers ;;
       0) exit_script ;;
       *) print_warn "Invalid option." ;;
     esac
