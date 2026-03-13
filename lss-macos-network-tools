@@ -509,6 +509,17 @@ speed_test() {
   run_scan "Running internet speed test" "speedtest-cli"
 }
 
+exit_script() {
+  echo
+  read -r -p "Export session report to Desktop? (y/n) " exp
+
+  if [[ "$exp" == "y" || "$exp" == "Y" ]]; then
+    export_report
+  fi
+
+  exit 0
+}
+
 export_report() {
   local date_stamp generated gateway dest
   date_stamp="$(date '+%Y-%m-%d_%H-%M-%S')"
@@ -567,7 +578,7 @@ main() {
       3) rogue_dhcp ;;
       4) find_web_interfaces ;;
       5) speed_test ;;
-      0) exit 0 ;;
+      0) exit_script ;;
       *) print_warn "Invalid option." ;;
     esac
   done
