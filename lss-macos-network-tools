@@ -5,8 +5,6 @@ set -o pipefail
 VERSION="1.0.0"
 REPO="korshakov/lss-macos-network-tools"
 LOGFILE="/tmp/lss-netinfo-session.log"
-DISCOVERY_CACHE="/tmp/lss-discovery-cache"
-DEVICE_PROFILE_CACHE="/tmp/lss-device-profile-cache"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -16,8 +14,6 @@ NC='\033[0m'
 
 IF=""
 CURRENT_GATEWAY=""
-DHCP_SCAN_OUTPUT=""
-DHCP_SCAN_RAN=0
 
 : > "$LOGFILE"
 
@@ -303,19 +299,8 @@ run_scan() {
   echo "----------------------------------------" | tee -a "$LOGFILE"
 }
 
-ensure_discovery_cache() {
-  local net
-  net="$(get_network)"
-
-  if [[ ! -f "$DISCOVERY_CACHE" ]]; then
-    echo "Running network discovery..." | tee -a "$LOGFILE"
-    run_scan "Discovering devices on $net (cached)" "sudo nmap -sn $net | tee $DISCOVERY_CACHE"
-  else
-    echo "Using cached discovery results" | tee -a "$LOGFILE"
-  fi
-}
-
 extract_discovered_hosts() {
+  local discovery_file="$1"
   awk '
     /^Nmap scan report for / {
       ip=$NF
@@ -333,7 +318,7 @@ extract_discovered_hosts() {
       }
       print ip "|" vendor
     }
-  ' "$DISCOVERY_CACHE"
+  ' "$discovery_file"
 }
 
 port_in_list() {
@@ -437,60 +422,44 @@ scan_device_profile() {
   printf "%s|%s|%s|%s|%s|%s\n" "$ip" "$vendor" "$ports" "$services" "$os_name" "$device_type"
 }
 
-ensure_device_profile_cache() {
-  local hosts_tmp rebuilt_tmp host_line ip vendor
-  ensure_discovery_cache
+build_device_profiles() {
+  local discovery_file="$1"
+  local output_file="$2"
+  local hosts_tmp ip vendor
 
   hosts_tmp="$(mktemp /tmp/lss-hosts.XXXXXX)"
-  rebuilt_tmp="$(mktemp /tmp/lss-profiles.XXXXXX)"
-  extract_discovered_hosts > "$hosts_tmp"
-
-  [[ -f "$DEVICE_PROFILE_CACHE" ]] || : > "$DEVICE_PROFILE_CACHE"
+  extract_discovered_hosts "$discovery_file" > "$hosts_tmp"
+  : > "$output_file"
 
   while IFS='|' read -r ip vendor; do
     [[ -z "$ip" ]] && continue
-    host_line="$(grep -E "^${ip//./\\.}\|" "$DEVICE_PROFILE_CACHE" | head -n1 || true)"
-    if [[ -n "$host_line" ]]; then
-      echo "$host_line" >> "$rebuilt_tmp"
-    else
-      scan_device_profile "$ip" "$vendor" >> "$rebuilt_tmp"
-    fi
+    scan_device_profile "$ip" "$vendor" >> "$output_file"
   done < "$hosts_tmp"
-
-  mv "$rebuilt_tmp" "$DEVICE_PROFILE_CACHE"
   rm -f "$hosts_tmp"
 }
 
 print_classification_table() {
-  ensure_device_profile_cache
+  local profile_file="$1"
 
   echo "## IP Address        Vendor                 Device Type" | tee -a "$LOGFILE"
-  awk -F'|' '{ printf "%-17s %-22s %s\n", $1, $2, $6 }' "$DEVICE_PROFILE_CACHE" | tee -a "$LOGFILE"
+  awk -F'|' '{ printf "%-17s %-22s %s\n", $1, $2, $6 }' "$profile_file" | tee -a "$LOGFILE"
 }
 
 run_dhcp_discover_scan() {
-  if [[ "$DHCP_SCAN_RAN" -eq 1 ]]; then
-    print_info "Using cached DHCP scan results" | tee -a "$LOGFILE"
-    return 0
-  fi
-
   echo "---" | tee -a "$LOGFILE"
   print_info "## Running scan..." | tee -a "$LOGFILE"
   print_info "Running DHCP detection..." | tee -a "$LOGFILE"
 
-  DHCP_SCAN_OUTPUT="$(sudo nmap --script broadcast-dhcp-discover -e "$IF" 2>/dev/null || true)"
-  DHCP_SCAN_RAN=1
-
-  echo "$DHCP_SCAN_OUTPUT" | tee -a "$LOGFILE" | colorize_scan_output
+  sudo nmap --script broadcast-dhcp-discover -e "$IF" 2>/dev/null | tee -a "$LOGFILE" | colorize_scan_output
 
   echo "---" | tee -a "$LOGFILE"
   print_info "## Scan complete" | tee -a "$LOGFILE"
 }
-
 dhcp_server_count() {
-  echo "$DHCP_SCAN_OUTPUT" | grep -c "Server Identifier" || true
+  local output
+  output="$(sudo nmap --script broadcast-dhcp-discover -e "$IF" 2>/dev/null || true)"
+  echo "$output" | grep -c "Server Identifier" || true
 }
-
 interface_info() {
   CURRENT_GATEWAY="$(get_gateway)"
   {
@@ -506,11 +475,19 @@ interface_info() {
 }
 
 discover_devices() {
-  ensure_discovery_cache
+  local net discovery_file profile_file
+  net="$(get_network)"
+  discovery_file="$(mktemp -t lss-discovery)"
+  profile_file="$(mktemp /tmp/lss-profiles.XXXXXX)"
+
+  run_scan "Discovering devices on $net" "sudo nmap -sn $net | tee $discovery_file"
+  build_device_profiles "$discovery_file" "$profile_file"
 
   echo
   print_info "Detected devices with classification:"
-  print_classification_table
+  print_classification_table "$profile_file"
+
+  rm -f "$discovery_file" "$profile_file"
 }
 
 gateway_ports() {
@@ -531,8 +508,9 @@ rogue_dhcp() {
 }
 
 network_map() {
-  ensure_discovery_cache
-  run_scan "Network map (cached discovery results)" "cat $DISCOVERY_CACHE"
+  local net
+  net="$(get_network)"
+  run_scan "Network map" "sudo nmap -sn $net"
 }
 
 find_web_interfaces() {
@@ -553,18 +531,29 @@ speed_test() {
 }
 
 build_topology_summary() {
-  local total routers access_points printers nas servers workstations iot unknown
-  ensure_device_profile_cache
+  local net tmp_file profile_file total routers access_points printers nas servers workstations iot unknown
+  net="$(get_network)"
+  tmp_file=$(mktemp -t lss-topology)
+  profile_file="$(mktemp /tmp/lss-profiles.XXXXXX)"
 
-  total="$(wc -l < "$DEVICE_PROFILE_CACHE" | tr -d ' ')"
-  routers="$(awk -F'|' '$6=="Router" {c++} END{print c+0}' "$DEVICE_PROFILE_CACHE")"
-  access_points="$(awk -F'|' '$6=="Access Point" {c++} END{print c+0}' "$DEVICE_PROFILE_CACHE")"
-  printers="$(awk -F'|' '$6=="Printer" {c++} END{print c+0}' "$DEVICE_PROFILE_CACHE")"
-  nas="$(awk -F'|' '$6=="NAS" {c++} END{print c+0}' "$DEVICE_PROFILE_CACHE")"
-  servers="$(awk -F'|' '$6=="Server" {c++} END{print c+0}' "$DEVICE_PROFILE_CACHE")"
-  workstations="$(awk -F'|' '$6=="Workstation" {c++} END{print c+0}' "$DEVICE_PROFILE_CACHE")"
-  iot="$(awk -F'|' '$6=="IoT Device" {c++} END{print c+0}' "$DEVICE_PROFILE_CACHE")"
-  unknown="$(awk -F'|' '$6=="Unknown" {c++} END{print c+0}' "$DEVICE_PROFILE_CACHE")"
+  echo "---" | tee -a "$LOGFILE"
+  print_info "## Running scan..." | tee -a "$LOGFILE"
+  print_info "Running topology discovery scan on $net" | tee -a "$LOGFILE"
+  sudo nmap -sn "$net" > "$tmp_file" 2>/dev/null || true
+  echo "---" | tee -a "$LOGFILE"
+  print_info "## Scan complete" | tee -a "$LOGFILE"
+
+  build_device_profiles "$tmp_file" "$profile_file"
+
+  total="$(wc -l < "$profile_file" | tr -d ' ')"
+  routers="$(awk -F'|' '$6=="Router" {c++} END{print c+0}' "$profile_file")"
+  access_points="$(awk -F'|' '$6=="Access Point" {c++} END{print c+0}' "$profile_file")"
+  printers="$(awk -F'|' '$6=="Printer" {c++} END{print c+0}' "$profile_file")"
+  nas="$(awk -F'|' '$6=="NAS" {c++} END{print c+0}' "$profile_file")"
+  servers="$(awk -F'|' '$6=="Server" {c++} END{print c+0}' "$profile_file")"
+  workstations="$(awk -F'|' '$6=="Workstation" {c++} END{print c+0}' "$profile_file")"
+  iot="$(awk -F'|' '$6=="IoT Device" {c++} END{print c+0}' "$profile_file")"
+  unknown="$(awk -F'|' '$6=="Unknown" {c++} END{print c+0}' "$profile_file")"
 
   echo | tee -a "$LOGFILE"
   echo "Network Summary" | tee -a "$LOGFILE"
@@ -582,6 +571,7 @@ build_topology_summary() {
   echo "IoT Devices: ${iot:-0}" | tee -a "$LOGFILE"
   echo "Unknown devices: ${unknown:-0}" | tee -a "$LOGFILE"
 
+  rm -f "$tmp_file" "$profile_file"
 }
 
 network_health_summary() {
@@ -589,10 +579,17 @@ network_health_summary() {
   local gateway_reachable internet_reachable devices dhcp_count mgmt_count remote_count unknown_devices
   net="$(get_network)"
   gw="$(get_gateway)"
-  ensure_discovery_cache
-  discovery_file="$DISCOVERY_CACHE"
+  discovery_file="$(mktemp /tmp/lss-health-discovery.XXXXXX)"
   mgmt_file="$(mktemp /tmp/lss-health-mgmt.XXXXXX)"
   remote_file="$(mktemp /tmp/lss-health-remote.XXXXXX)"
+
+  echo "---" | tee -a "$LOGFILE"
+  print_info "## Running scan..." | tee -a "$LOGFILE"
+  print_info "Running discovery scan..." | tee -a "$LOGFILE"
+  print_info "Scanning network $net" | tee -a "$LOGFILE"
+  sudo nmap -sn "$net" > "$discovery_file" 2>/dev/null || true
+  echo "---" | tee -a "$LOGFILE"
+  print_info "## Scan complete" | tee -a "$LOGFILE"
 
   run_dhcp_discover_scan
 
@@ -660,15 +657,7 @@ network_health_summary() {
     print_alert "WARNING: Unknown devices detected" | tee -a "$LOGFILE"
   fi
 
-  rm -f "$mgmt_file" "$remote_file"
-}
-
-refresh_discovery_scan() {
-  rm -f "$DISCOVERY_CACHE"
-  rm -f "$DEVICE_PROFILE_CACHE"
-  DHCP_SCAN_RAN=0
-  DHCP_SCAN_OUTPUT=""
-  ensure_discovery_cache
+  rm -f "$discovery_file" "$mgmt_file" "$remote_file"
 }
 
 export_report() {
@@ -687,12 +676,7 @@ export_report() {
       cat "$LOGFILE" | sed -r 's/\x1B\[[0-9;]*[mK]//g'
     else
       cat "$LOGFILE" | sed -E 's/\x1B\[[0-9;]*[mK]//g'
-    fi | sed '/^## Running scan\.\.\.$/d; /^## Scan complete$/d; /^Running .*\.\.\.$/d; /^Scanning network /d; /^Using cached DHCP scan results$/d; /^---$/d; /^----------------------------------------$/d'
-    echo
-    echo "Device Classification"
-    echo "---------------------"
-    ensure_device_profile_cache
-    awk -F'|' 'BEGIN { printf "%-17s %-22s %s\n", "IP Address", "Vendor", "Device Type" } { printf "%-17s %-22s %s\n", $1, $2, $6 }' "$DEVICE_PROFILE_CACHE"
+    fi | sed '/^## Running scan\.\.\.$/d; /^## Scan complete$/d; /^Running .*\.\.\.$/d; /^Scanning network /d; /^---$/d; /^----------------------------------------$/d'
   } > "$dest"
 
   print_ok "Export saved to: $dest"
@@ -714,7 +698,7 @@ show_menu() {
   echo "9) Internet Speed Test"
   echo "10) Network Topology Summary"
   echo "11) Network Health Summary"
-  echo "12) Refresh discovery scan"
+  echo "12) Exit"
   echo
   echo "0) Exit"
   echo
@@ -743,7 +727,6 @@ main() {
       9) speed_test ;;
       10) build_topology_summary ;;
       11) network_health_summary ;;
-      12) refresh_discovery_scan ;;
       0)
         echo
         read -r -p "Export session report to Desktop? (y/n) " exp
@@ -752,6 +735,7 @@ main() {
         fi
         exit 0
         ;;
+      12) exit 0 ;;
       *) print_warn "Invalid option." ;;
     esac
   done

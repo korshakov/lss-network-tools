@@ -100,38 +100,16 @@ Scan complete
 
 ---
 
-## Cached Discovery Scans
+## Discovery Behavior
 
-Discovery scans are cached to improve performance.
+Discovery-based features always run a **fresh live scan** each time you select them.
 
-Cache location:
-
-```
-/tmp/lss-discovery-cache
-```
-
-The following features reuse cached results:
+This applies to:
 
 - Discover Devices
 - Network Map
 - Network Topology Summary
 - Network Health Summary
-
-This prevents repeated scans and significantly speeds up the tool.
-
----
-
-## Refresh Discovery Scan
-
-Menu option **12**
-
-Clears the discovery cache and runs a fresh network discovery scan.
-
-Example command used internally:
-
-```
-rm -f /tmp/lss-discovery-cache
-```
 
 ---
 
