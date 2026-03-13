@@ -3,7 +3,6 @@ set -e
 set -o pipefail
 
 VERSION="1.0.0"
-REPO="korshakov/lss-macos-network-tools"
 
 if [[ "${1:-}" == "--version" ]]; then
   echo "LSS macOS Network Tools v${VERSION}"
@@ -12,7 +11,6 @@ fi
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
-YELLOW='\033[1;33m'
 NC='\033[0m'
 
 LOGFILE="/tmp/lss-netinfo-session.log"
@@ -72,113 +70,6 @@ run_dependency_check() {
   for dep in brew nmap arp-scan speedtest-cli; do
     check_dependency "$dep"
   done
-}
-
-version_is_newer() {
-  local latest="$1"
-  local current="$2"
-  local latest_major latest_minor latest_patch
-  local current_major current_minor current_patch
-
-  IFS='.' read -r latest_major latest_minor latest_patch <<< "$latest"
-  IFS='.' read -r current_major current_minor current_patch <<< "$current"
-
-  latest_major=${latest_major:-0}
-  latest_minor=${latest_minor:-0}
-  latest_patch=${latest_patch:-0}
-  current_major=${current_major:-0}
-  current_minor=${current_minor:-0}
-  current_patch=${current_patch:-0}
-
-  if (( latest_major > current_major )); then
-    return 0
-  elif (( latest_major < current_major )); then
-    return 1
-  fi
-
-  if (( latest_minor > current_minor )); then
-    return 0
-  elif (( latest_minor < current_minor )); then
-    return 1
-  fi
-
-  if (( latest_patch > current_patch )); then
-    return 0
-  fi
-
-  return 1
-}
-
-check_for_updates() {
-  local latest_tag latest_version response update_url tmp_dir extracted_dir updated=0
-
-  if ! command -v curl >/dev/null 2>&1; then
-    echo -e "${YELLOW}Update check skipped: curl is not available.${NC}"
-    return 0
-  fi
-
-  response="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null || true)"
-  latest_tag="$(printf '%s\n' "$response" | awk -F '"' '/"tag_name"/ {print $4; exit}')"
-
-  if [[ -z "$latest_tag" ]]; then
-    return 0
-  fi
-
-  latest_version="${latest_tag#v}"
-
-  if ! version_is_newer "$latest_version" "$VERSION"; then
-    return 0
-  fi
-
-  echo ""
-  echo "Update available: v${latest_version}"
-  echo "Current version: v${VERSION}"
-  echo ""
-  read -r -p "Install update now? (y/n) " answer
-
-  if [[ "$answer" != "y" && "$answer" != "Y" ]]; then
-    return 0
-  fi
-
-  update_url="https://github.com/${REPO}/archive/refs/tags/v${latest_version}.tar.gz"
-  tmp_dir="$(mktemp -d /tmp/lss-update.XXXXXX)"
-  trap 'rm -rf "$tmp_dir"' RETURN
-
-  curl -fsSL "$update_url" -o "$tmp_dir/update.tar.gz"
-  tar -xzf "$tmp_dir/update.tar.gz" -C "$tmp_dir"
-  extracted_dir="$tmp_dir/lss-macos-network-tools-${latest_version}"
-
-  if [[ ! -f "$extracted_dir/lss-macos-network-tools" ]]; then
-    echo "Update package is invalid."
-    return 1
-  fi
-
-  if [[ -f "/usr/local/bin/lss" ]]; then
-    sudo cp "$extracted_dir/lss-macos-network-tools" /usr/local/bin/lss
-    sudo chmod +x /usr/local/bin/lss
-    updated=1
-  fi
-
-  if [[ -f "/usr/local/bin/lss-macos-network-tools" ]]; then
-    sudo cp "$extracted_dir/lss-macos-network-tools" /usr/local/bin/lss-macos-network-tools
-    sudo chmod +x /usr/local/bin/lss-macos-network-tools
-    updated=1
-  fi
-
-  if [[ "$0" == *"lss-macos-network-tools" ]] && [[ -w "$0" ]]; then
-    cp "$extracted_dir/lss-macos-network-tools" "$0"
-    chmod +x "$0"
-    updated=1
-  fi
-
-  if [[ $updated -eq 0 ]]; then
-    echo "No supported installation path found for auto-update."
-    return 1
-  fi
-
-  echo "Update installed successfully."
-  echo "Restarting tool..."
-  exec "$0"
 }
 
 get_interfaces() {
@@ -438,7 +329,6 @@ show_menu() {
 }
 
 run_dependency_check
-check_for_updates
 sudo -v
 select_interface
 
