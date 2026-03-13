@@ -6,6 +6,7 @@ VERSION="1.0.0"
 REPO="korshakov/lss-macos-network-tools"
 LOGFILE="/tmp/lss-netinfo-session.log"
 DISCOVERY_CACHE="/tmp/lss-discovery-cache"
+DEVICE_PROFILE_CACHE="/tmp/lss-device-profile-cache"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -314,6 +315,159 @@ ensure_discovery_cache() {
   fi
 }
 
+extract_discovered_hosts() {
+  awk '
+    /^Nmap scan report for / {
+      ip=$NF
+      vendor="Unknown"
+      while (getline > 0) {
+        if ($0 ~ /^Nmap scan report for / || $0 ~ /^Nmap done/ || $0 ~ /^$/) {
+          break
+        }
+        if ($0 ~ /MAC Address:/) {
+          split($0, a, "(")
+          vendor=a[2]
+          gsub(/\)/, "", vendor)
+          break
+        }
+      }
+      print ip "|" vendor
+    }
+  ' "$DISCOVERY_CACHE"
+}
+
+port_in_list() {
+  local needle="$1"
+  local list=",$2,"
+  [[ "$list" == *",$needle,"* ]]
+}
+
+classify_device_type() {
+  local vendor="$1"
+  local ports="$2"
+  local services="$3"
+  local os_name="$4"
+
+  local has22=0 has80=0 has443=0 has445=0 has554=0 has515=0 has631=0 has9100=0
+  local has3306=0 has5432=0 has5000=0 has5001=0 has8443=0
+  local server_score=0
+
+  port_in_list 22 "$ports" && has22=1
+  port_in_list 80 "$ports" && has80=1
+  port_in_list 443 "$ports" && has443=1
+  port_in_list 445 "$ports" && has445=1
+  port_in_list 554 "$ports" && has554=1
+  port_in_list 515 "$ports" && has515=1
+  port_in_list 631 "$ports" && has631=1
+  port_in_list 9100 "$ports" && has9100=1
+  port_in_list 3306 "$ports" && has3306=1
+  port_in_list 5432 "$ports" && has5432=1
+  port_in_list 5000 "$ports" && has5000=1
+  port_in_list 5001 "$ports" && has5001=1
+  port_in_list 8443 "$ports" && has8443=1
+
+  if [[ "$vendor" =~ (HP|Brother|Canon|Epson|Lexmark|Xerox) ]] && [[ $has9100 -eq 1 || $has631 -eq 1 || $has515 -eq 1 ]]; then
+    echo "Printer"
+    return
+  fi
+
+  if [[ "$vendor" =~ (Synology|QNAP|Asustor|Western[[:space:]]Digital) ]] && [[ $has5000 -eq 1 || $has5001 -eq 1 || $has445 -eq 1 ]]; then
+    echo "NAS"
+    return
+  fi
+
+  if [[ "$vendor" =~ (Ubiquiti|Cisco|MikroTik|Juniper|Fortinet|Netgear|TP-Link|ASUS|Protectli) ]] && [[ $has80 -eq 1 || $has443 -eq 1 ]] && [[ $has22 -eq 1 || $has8443 -eq 1 ]]; then
+    echo "Router"
+    return
+  fi
+
+  if [[ "$vendor" =~ (Ubiquiti|Aruba|Ruckus|TP-Link) ]] && [[ $has80 -eq 1 || $has443 -eq 1 ]]; then
+    echo "Access Point"
+    return
+  fi
+
+  if [[ "$vendor" =~ (Tuya|Espressif|Xiaomi|Sonoff) ]] && [[ $has80 -eq 1 || $has443 -eq 1 || $has554 -eq 1 ]]; then
+    echo "IoT Device"
+    return
+  fi
+
+  [[ $has22 -eq 1 ]] && ((server_score++))
+  [[ $has80 -eq 1 ]] && ((server_score++))
+  [[ $has443 -eq 1 ]] && ((server_score++))
+  [[ $has445 -eq 1 ]] && ((server_score++))
+  [[ $has3306 -eq 1 ]] && ((server_score++))
+  [[ $has5432 -eq 1 ]] && ((server_score++))
+
+  if [[ $server_score -ge 2 ]]; then
+    echo "Server"
+    return
+  fi
+
+  if [[ "$vendor" =~ (Apple|Dell|Lenovo|HP) ]] && [[ $server_score -le 1 ]]; then
+    echo "Workstation"
+    return
+  fi
+
+  if [[ "$os_name" =~ (Windows|Darwin|macOS) ]] && [[ $server_score -le 1 ]]; then
+    echo "Workstation"
+    return
+  fi
+
+  if [[ "$services" =~ (ipp|printer|jetdirect) ]]; then
+    echo "Printer"
+    return
+  fi
+
+  echo "Unknown"
+}
+
+scan_device_profile() {
+  local ip="$1"
+  local vendor="$2"
+  local output ports services os_name device_type
+
+  output="$(sudo nmap -Pn -O -sV --version-light -p 22,80,443,445,554,515,631,9100,3306,5432,5000,5001,8443 "$ip" 2>/dev/null || true)"
+
+  ports="$(echo "$output" | awk '/^[0-9]+\/tcp[[:space:]]+open/ {split($1,a,"/"); printf "%s%s", (count++ ? "," : ""), a[1]} END {print ""}')"
+  services="$(echo "$output" | awk '/^[0-9]+\/tcp[[:space:]]+open/ {printf "%s%s", (count++ ? "," : ""), $3} END {print ""}')"
+  os_name="$(echo "$output" | awk -F': ' '/^Running: / {print $2; exit} /^OS details: / {print $2; exit}')"
+
+  device_type="$(classify_device_type "$vendor" "$ports" "$services" "$os_name")"
+
+  printf "%s|%s|%s|%s|%s|%s\n" "$ip" "$vendor" "$ports" "$services" "$os_name" "$device_type"
+}
+
+ensure_device_profile_cache() {
+  local hosts_tmp rebuilt_tmp host_line ip vendor
+  ensure_discovery_cache
+
+  hosts_tmp="$(mktemp /tmp/lss-hosts.XXXXXX)"
+  rebuilt_tmp="$(mktemp /tmp/lss-profiles.XXXXXX)"
+  extract_discovered_hosts > "$hosts_tmp"
+
+  [[ -f "$DEVICE_PROFILE_CACHE" ]] || : > "$DEVICE_PROFILE_CACHE"
+
+  while IFS='|' read -r ip vendor; do
+    [[ -z "$ip" ]] && continue
+    host_line="$(grep -E "^${ip//./\\.}\|" "$DEVICE_PROFILE_CACHE" | head -n1 || true)"
+    if [[ -n "$host_line" ]]; then
+      echo "$host_line" >> "$rebuilt_tmp"
+    else
+      scan_device_profile "$ip" "$vendor" >> "$rebuilt_tmp"
+    fi
+  done < "$hosts_tmp"
+
+  mv "$rebuilt_tmp" "$DEVICE_PROFILE_CACHE"
+  rm -f "$hosts_tmp"
+}
+
+print_classification_table() {
+  ensure_device_profile_cache
+
+  echo "## IP Address        Vendor                 Device Type" | tee -a "$LOGFILE"
+  awk -F'|' '{ printf "%-17s %-22s %s\n", $1, $2, $6 }' "$DEVICE_PROFILE_CACHE" | tee -a "$LOGFILE"
+}
+
 run_dhcp_discover_scan() {
   if [[ "$DHCP_SCAN_RAN" -eq 1 ]]; then
     print_info "Using cached DHCP scan results" | tee -a "$LOGFILE"
@@ -355,24 +509,8 @@ discover_devices() {
   ensure_discovery_cache
 
   echo
-  print_info "Detected devices (IP + Vendor):"
-  awk '
-    /^Nmap scan report for / {
-      ip=$NF
-      vendor="Unknown"
-      getline
-      while ($0 !~ /^Nmap scan report for / && $0 !~ /^Nmap done/ && $0 !~ /^$/) {
-        if ($0 ~ /MAC Address:/) {
-          split($0, a, "(")
-          vendor=a[2]
-          gsub(/\)/, "", vendor)
-          break
-        }
-        if (getline <= 0) break
-      }
-      printf "%-16s %s\n", ip, vendor
-    }
-  ' "$DISCOVERY_CACHE" | tee -a "$LOGFILE"
+  print_info "Detected devices with classification:"
+  print_classification_table
 }
 
 gateway_ports() {
@@ -415,14 +553,18 @@ speed_test() {
 }
 
 build_topology_summary() {
-  local total apple printers routers unknown
-  ensure_discovery_cache
+  local total routers access_points printers nas servers workstations iot unknown
+  ensure_device_profile_cache
 
-  total="$(grep -c '^Nmap scan report for ' "$DISCOVERY_CACHE" 2>/dev/null || true)"
-  apple="$(grep -Ei 'MAC Address: .*\(.*Apple' "$DISCOVERY_CACHE" 2>/dev/null | wc -l | tr -d ' ' || true)"
-  printers="$(grep -Ei 'MAC Address: .*\(.*(HP|Brother|Canon|Epson|Xerox|Lexmark)' "$DISCOVERY_CACHE" 2>/dev/null | wc -l | tr -d ' ' || true)"
-  routers="$(grep -Ei 'MAC Address: .*\(.*(Ubiquiti|Cisco|MikroTik|Netgear|TP-Link|ASUS|Juniper)' "$DISCOVERY_CACHE" 2>/dev/null | wc -l | tr -d ' ' || true)"
-  unknown="$(grep -Ei 'MAC Address: .*\(Unknown\)' "$DISCOVERY_CACHE" 2>/dev/null | wc -l | tr -d ' ' || true)"
+  total="$(wc -l < "$DEVICE_PROFILE_CACHE" | tr -d ' ')"
+  routers="$(awk -F'|' '$6=="Router" {c++} END{print c+0}' "$DEVICE_PROFILE_CACHE")"
+  access_points="$(awk -F'|' '$6=="Access Point" {c++} END{print c+0}' "$DEVICE_PROFILE_CACHE")"
+  printers="$(awk -F'|' '$6=="Printer" {c++} END{print c+0}' "$DEVICE_PROFILE_CACHE")"
+  nas="$(awk -F'|' '$6=="NAS" {c++} END{print c+0}' "$DEVICE_PROFILE_CACHE")"
+  servers="$(awk -F'|' '$6=="Server" {c++} END{print c+0}' "$DEVICE_PROFILE_CACHE")"
+  workstations="$(awk -F'|' '$6=="Workstation" {c++} END{print c+0}' "$DEVICE_PROFILE_CACHE")"
+  iot="$(awk -F'|' '$6=="IoT Device" {c++} END{print c+0}' "$DEVICE_PROFILE_CACHE")"
+  unknown="$(awk -F'|' '$6=="Unknown" {c++} END{print c+0}' "$DEVICE_PROFILE_CACHE")"
 
   echo | tee -a "$LOGFILE"
   echo "Network Summary" | tee -a "$LOGFILE"
@@ -430,10 +572,14 @@ build_topology_summary() {
   echo "Gateway: $(get_gateway)" | tee -a "$LOGFILE"
   echo "Devices detected: ${total:-0}" | tee -a "$LOGFILE"
   echo | tee -a "$LOGFILE"
-  echo "Breakdown:" | tee -a "$LOGFILE"
-  echo "Apple devices: ${apple:-0}" | tee -a "$LOGFILE"
-  echo "Printers: ${printers:-0}" | tee -a "$LOGFILE"
+  echo "Device Classification Breakdown:" | tee -a "$LOGFILE"
   echo "Routers: ${routers:-0}" | tee -a "$LOGFILE"
+  echo "Access Points: ${access_points:-0}" | tee -a "$LOGFILE"
+  echo "Printers: ${printers:-0}" | tee -a "$LOGFILE"
+  echo "NAS: ${nas:-0}" | tee -a "$LOGFILE"
+  echo "Servers: ${servers:-0}" | tee -a "$LOGFILE"
+  echo "Workstations: ${workstations:-0}" | tee -a "$LOGFILE"
+  echo "IoT Devices: ${iot:-0}" | tee -a "$LOGFILE"
   echo "Unknown devices: ${unknown:-0}" | tee -a "$LOGFILE"
 
 }
@@ -519,6 +665,7 @@ network_health_summary() {
 
 refresh_discovery_scan() {
   rm -f "$DISCOVERY_CACHE"
+  rm -f "$DEVICE_PROFILE_CACHE"
   DHCP_SCAN_RAN=0
   DHCP_SCAN_OUTPUT=""
   ensure_discovery_cache
@@ -541,6 +688,11 @@ export_report() {
     else
       cat "$LOGFILE" | sed -E 's/\x1B\[[0-9;]*[mK]//g'
     fi | sed '/^## Running scan\.\.\.$/d; /^## Scan complete$/d; /^Running .*\.\.\.$/d; /^Scanning network /d; /^Using cached DHCP scan results$/d; /^---$/d; /^----------------------------------------$/d'
+    echo
+    echo "Device Classification"
+    echo "---------------------"
+    ensure_device_profile_cache
+    awk -F'|' 'BEGIN { printf "%-17s %-22s %s\n", "IP Address", "Vendor", "Device Type" } { printf "%-17s %-22s %s\n", $1, $2, $6 }' "$DEVICE_PROFILE_CACHE"
   } > "$dest"
 
   print_ok "Export saved to: $dest"
@@ -552,7 +704,7 @@ show_menu() {
   echo "    LSS macOS Network Tools"
   echo "================================="
   echo "1) Interface Network Info"
-  echo "2) Discover Devices (Vendor Detection)"
+  echo "2) Discover Devices (Vendor + Classification)"
   echo "3) Gateway Port Scan"
   echo "4) Gateway Fingerprint"
   echo "5) Rogue DHCP Detection"
