@@ -16,7 +16,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DATA_DIR = SCRIPT_DIR.parent / "analyzer-data"
+DATA_DIR = SCRIPT_DIR / "analyzer-data"
+DATA_DIR.mkdir(exist_ok=True)
+
 LOGFILE = DATA_DIR / "lss-netinfo-session.log"
 DEVICES_FILE = DATA_DIR / "devices.json"
 SUMMARY_FILE = DATA_DIR / "network-summary.txt"

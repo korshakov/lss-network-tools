@@ -4,9 +4,18 @@ set -o pipefail
 
 VERSION="1.0.0"
 REPO="korshakov/lss-network-tools"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="$(readlink "$0" 2>/dev/null)"
+
+if [ -z "$SCRIPT_PATH" ]; then
+    SCRIPT_PATH="$0"
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+
 DATA_DIR="$SCRIPT_DIR/analyzer-data"
+
 mkdir -p "$DATA_DIR"
+
 LOGFILE="$DATA_DIR/lss-netinfo-session.log"
 
 GREEN='\033[0;32m'
