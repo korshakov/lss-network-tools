@@ -508,9 +508,10 @@ rogue_dhcp() {
 }
 
 find_web_interfaces() {
-  local net tmp current_ip line port url status found
+  local net tmp live_hosts current_ip line port url status found ip
   net="$(get_network)"
   tmp="$(mktemp)"
+  live_hosts="$(mktemp)"
   found=0
 
   echo
@@ -518,7 +519,25 @@ find_web_interfaces() {
   echo "This may take a moment."
   echo
 
-  nmap -p 80,443,8080,8443 --open "$net" > "$tmp" 2>/dev/null || true
+  echo
+  echo "Discovering active hosts..."
+  echo
+
+  nmap -sn "$net" | while read -r line; do
+    if echo "$line" | grep -q "Nmap scan report for"; then
+      ip="$(echo "$line" | awk '{print $NF}')"
+      echo "Active host discovered: $ip"
+      echo "$ip" >> "$live_hosts"
+    fi
+  done
+
+  if [ ! -s "$live_hosts" ]; then
+    echo "No active hosts discovered."
+    rm -f "$live_hosts" "$tmp"
+    return
+  fi
+
+  nmap -p 80,443,8080,8443 --open -iL "$live_hosts" > "$tmp" 2>/dev/null || true
 
   echo
   echo "## Web Management Interfaces"
@@ -564,7 +583,7 @@ find_web_interfaces() {
     echo "No web management interfaces found."
   fi
 
-  rm -f "$tmp"
+  rm -f "$live_hosts" "$tmp"
 }
 
 speed_test() {
