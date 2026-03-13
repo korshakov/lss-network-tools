@@ -515,7 +515,7 @@ interface_info() {
 }
 
 gateway_scan() {
-  local gw output formatted scan_output_file scan_pid
+  local gw output formatted unique_formatted discovery_count scan_output_file scan_pid
   gw="$(get_gateway)"
 
   scan_output_file="$(mktemp)"
@@ -537,16 +537,30 @@ gateway_scan() {
     }
   ')"
 
+  unique_formatted="$(printf "%s\n" "$formatted" | sed '/^[[:space:]]*$/d' | sort -u)"
+  if [[ -n "$unique_formatted" ]]; then
+    discovery_count="$(printf "%s\n" "$unique_formatted" | wc -l | tr -d ' ')"
+  else
+    discovery_count=0
+  fi
+
   log_echo ""
   log_echo "## Gateway Scan Results"
   log_echo ""
   log_echo "Gateway: $gw"
   log_echo ""
+  log_echo "Gateway discovery entries: $discovery_count"
+  log_echo ""
+  log_echo "--- RAW DISCOVERY ---"
+  print_none_if_empty "$unique_formatted"
+  log_echo ""
+  log_echo "--- VERIFICATION ---"
+  log_echo ""
   log_echo "Open Services:"
   log_echo ""
 
-  if [[ -n "$formatted" ]]; then
-    log_echo "$formatted"
+  if [[ -n "$unique_formatted" ]]; then
+    log_echo "$unique_formatted"
   else
     log_echo "No open services found."
   fi
@@ -560,10 +574,11 @@ rogue_dhcp() {
 }
 
 find_web_interfaces() {
-  local net tmp live_hosts tmp_discovery scan_pid current_ip line port url status found ip
+  local net tmp live_hosts tmp_discovery scan_pid current_ip line port url status found raw_discovery unique_raw_discovery discovery_count
   net="$(get_network)"
   tmp="$(mktemp)"
   live_hosts="$(mktemp)"
+  raw_discovery="$(mktemp)"
   found=0
 
   log_echo ""
@@ -581,29 +596,36 @@ find_web_interfaces() {
   scan_pid=$!
 
   spinner $scan_pid
-
   wait $scan_pid
 
   grep "Nmap scan report for" "$tmp_discovery" | awk '{print $NF}' > "$live_hosts"
 
   rm -f "$tmp_discovery"
 
+  log_echo ""
+  log_echo "## Web Management Interfaces"
+  log_echo ""
+
   if [ ! -s "$live_hosts" ]; then
+    log_echo "Web interface discovery entries: 0"
+    log_echo ""
+    log_echo "--- RAW DISCOVERY ---"
+    log_echo "None discovered on the network."
+    log_echo ""
+    log_echo "--- VERIFICATION ---"
+    log_echo ""
     log_echo "No active hosts discovered."
-    rm -f "$live_hosts" "$tmp"
+    log_echo "--- END WEB INTERFACES SECTION ---"
+    rm -f "$live_hosts" "$tmp" "$raw_discovery"
     return
   fi
 
   nmap -p 80,443,8080,8443 --open -iL "$live_hosts" > "$tmp" 2>/dev/null || true
 
-  log_echo ""
-  log_echo "## Web Management Interfaces"
-  log_echo ""
-
   current_ip=""
   while read -r line; do
     if echo "$line" | grep -q "Nmap scan report for"; then
-      current_ip="$(echo "$line" | awk '{print $NF}')"
+      current_ip="$(echo "$line" | awk '{print $NF}' | tr -d '()')"
       log_echo "Checking $current_ip..."
     fi
 
@@ -618,6 +640,7 @@ find_web_interfaces() {
         *) continue ;;
       esac
 
+      printf "%s|%s\n" "$current_ip" "$port" >> "$raw_discovery"
       log_echo "Testing $url"
 
       if curl -k --connect-timeout 2 -s -I "$url" >/dev/null; then
@@ -638,13 +661,28 @@ find_web_interfaces() {
     fi
   done < "$tmp"
 
+  unique_raw_discovery="$(sort -u "$raw_discovery" 2>/dev/null || true)"
+  if [[ -n "$unique_raw_discovery" ]]; then
+    discovery_count="$(printf "%s\n" "$unique_raw_discovery" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+  else
+    discovery_count=0
+  fi
+
+  log_echo "Web interface discovery entries: $discovery_count"
+  log_echo ""
+  log_echo "--- RAW DISCOVERY ---"
+  print_none_if_empty "$unique_raw_discovery"
+  log_echo ""
+  log_echo "--- VERIFICATION ---"
+  log_echo ""
+
   if [[ "$found" -eq 0 ]]; then
     log_echo "No web management interfaces found."
   fi
 
   log_echo "--- END WEB INTERFACES SECTION ---"
 
-  rm -f "$live_hosts" "$tmp"
+  rm -f "$live_hosts" "$tmp" "$raw_discovery"
 }
 
 speed_test() {
@@ -676,7 +714,7 @@ scan_dns_servers() {
   rm -f "$scan_output_file"
 
   discovered_services="$(echo "$scan_output" | awk '
-    /^Nmap scan report for / { ip=$NF; next }
+    /^Nmap scan report for / { ip=$NF; gsub(/[()]/, "", ip); next }
     /^[0-9]+\/(tcp|udp)[[:space:]]+open/ {
       split($1, p, "/")
       key=ip"|"p[1]
@@ -797,7 +835,7 @@ scan_file_servers() {
   rm -f "$scan_output_file"
 
   parsed_results="$(echo "$scan_output" | awk '
-    /^Nmap scan report for / { ip=$NF; next }
+    /^Nmap scan report for / { ip=$NF; gsub(/[()]/, "", ip); next }
     /^[0-9]+\/tcp[[:space:]]+open/ {
       split($1, p, "/")
       print ip "|" p[1]
@@ -873,7 +911,7 @@ scan_printers() {
   rm -f "$scan_output_file"
 
   parsed_results="$(echo "$scan_output" | awk '
-    /^Nmap scan report for / { ip=$NF; next }
+    /^Nmap scan report for / { ip=$NF; gsub(/[()]/, "", ip); next }
     /^[0-9]+\/tcp[[:space:]]+open/ {
       split($1, p, "/")
       print ip "|" p[1]
@@ -954,7 +992,7 @@ scan_printers() {
 
 exit_script() {
   echo
-  read -r -p "Export session report to Desktop? (y/n) " exp
+  read -r -p "Do you want to save the report? (y/n) " exp
 
   if [[ "$exp" == "y" || "$exp" == "Y" ]]; then
     export_report
@@ -972,13 +1010,8 @@ export_report() {
   read -rp "Enter directory to save report [~/lss-reports]: " export_dir
   export_dir=${export_dir:-~/lss-reports}
 
-  # Expand tilde if used
   export_dir=$(eval echo "$export_dir")
-
-  # Create directory if it doesn't exist
-  if [ ! -d "$export_dir" ]; then
-    mkdir -p "$export_dir"
-  fi
+  mkdir -p "$export_dir"
 
   dest="$export_dir/LSS-NetInfo-Export-$date_stamp.txt"
   clean_log="$(mktemp)"
@@ -987,7 +1020,7 @@ export_report() {
     sed -r 's/\x1B\[[0-9;]*[mK]//g' "$LOGFILE"
   else
     sed -E 's/\x1B\[[0-9;]*[mK]//g' "$LOGFILE"
-  fi | sed -E '/^## Running scan\.\.\.$/d; /^## Scan complete$/d; /^Running .*\.\.\.$/d; /^Running Internet speed test$/d; /^Running Internet speed test complete$/d; /^Starting Nmap/d; /^Pre-scan script results:/d; /^Scanning network/d; /^Discovering active hosts\.\.\.$/d; /^Checking [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\.\.\.$/d; /^Testing https?:\/\//d; /^---$/d; /^-+$/d' > "$clean_log"
+  fi | sed -E '/^## Running scan\.\.\.$/d; /^## Scan complete$/d; /^Running .*\.\.\.$/d; /^Running Internet speed test$/d; /^Running Internet speed test complete$/d; /^Starting Nmap/d; /^Nmap done:/d; /^Pre-scan script results:/d; /^Scanning network/d; /^Discovering active hosts\.\.\.$/d; /^Checking [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\.\.\.$/d; /^Testing https?:\/\//d; /^---$/d; /^-+$/d' > "$clean_log"
 
   {
     echo "========================================"
@@ -1034,7 +1067,7 @@ export_report() {
 
         if (current_section == "") next
 
-        if ($0 ~ /^Open Services:$/ || $0 ~ /^No open services found\.$/) { emit($0); next }
+        if ($0 ~ /^Open Services:$/ || $0 ~ /^No open services found\.$/ || $0 ~ /^[A-Za-z ].* discovery entries: / || $0 ~ /^--- RAW DISCOVERY ---$/ || $0 ~ /^--- VERIFICATION ---$/ || $0 ~ /^--- END .* SECTION ---$/ || $0 ~ /^None discovered on the network\.$/) { emit($0); next }
         if ($0 ~ /^Gateway: /) { emit($0); next }
 
         if ($0 ~ /^IP: /) {
