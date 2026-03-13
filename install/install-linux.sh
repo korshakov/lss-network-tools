@@ -9,15 +9,15 @@ fi
 
 if command -v apt-get >/dev/null 2>&1; then
   sudo apt-get update
-  sudo apt-get install -y nmap dnsutils speedtest-cli arp-scan curl
+  sudo apt-get install -y nmap dnsutils speedtest-cli arp-scan curl python3 python3-pip
 elif command -v dnf >/dev/null 2>&1; then
-  sudo dnf install -y nmap bind-utils speedtest-cli arp-scan curl
+  sudo dnf install -y nmap bind-utils speedtest-cli arp-scan curl python3
 elif command -v yum >/dev/null 2>&1; then
-  sudo yum install -y nmap bind-utils speedtest-cli arp-scan curl
+  sudo yum install -y nmap bind-utils speedtest-cli arp-scan curl python3
 elif command -v pacman >/dev/null 2>&1; then
-  sudo pacman -Sy --noconfirm nmap bind speedtest-cli arp-scan curl
+  sudo pacman -Sy --noconfirm nmap bind speedtest-cli arp-scan curl python
 elif command -v apk >/dev/null 2>&1; then
-  sudo apk add nmap bind-tools speedtest-cli arp-scan curl
+  sudo apk add nmap bind-tools speedtest-cli arp-scan curl python3
 else
   echo "No supported package manager found. Install nmap, dig, speedtest-cli, arp-scan, and curl manually."
   exit 1

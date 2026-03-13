@@ -8,7 +8,7 @@ if ! command -v brew >/dev/null 2>&1; then
   exit 1
 fi
 
-brew install nmap speedtest-cli arp-scan
+brew install nmap speedtest-cli arp-scan python
 
 sudo cp lss-macos-network-tools /usr/local/bin/lss-network-tools
 sudo chmod +x /usr/local/bin/lss-network-tools
