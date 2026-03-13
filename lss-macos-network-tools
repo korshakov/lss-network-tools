@@ -610,7 +610,7 @@ scan_dns_servers() {
 
   echo
   echo "Scanning network for DNS servers..."
-  scan_output="$(nmap -p 53 --open "$net" 2>/dev/null || true)"
+  scan_output="$(nmap -sU -p53 --open --max-retries 1 "$net" 2>/dev/null || true)"
 
   discovered_hosts="$(echo "$scan_output" | awk '/^Nmap scan report for / {print $NF}')"
 
