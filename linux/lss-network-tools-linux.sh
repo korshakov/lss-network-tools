@@ -1005,12 +1005,18 @@ scan_printers() {
 }
 
 exit_script() {
-  echo
-  read -r -p "Do you want to save the report? (y/n) " exp
+  local scan_output_file
+  scan_output_file="$LOGFILE"
 
-  if [[ "$exp" == "y" || "$exp" == "Y" ]]; then
-    export_report
+  mkdir -p analyser-data
+
+  REPORT_FILE="analyser-data/network-scan-$(date +%Y%m%d-%H%M%S).txt"
+
+  if [ -f "$scan_output_file" ]; then
+      mv "$scan_output_file" "$REPORT_FILE"
   fi
+
+  echo "Report saved to $REPORT_FILE"
 
   exit 0
 }
