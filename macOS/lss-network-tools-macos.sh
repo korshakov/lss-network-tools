@@ -71,19 +71,55 @@ log_echo() {
   echo "$*" | tee -a "$LOGFILE"
 }
 
+sanitize_for_export() {
+  sed -E 's/\x1B\[[0-9;]*[mK]//g'
+}
+
+init_scan_export_data() {
+  SCAN_NAME="$1"
+  SCAN_SUMMARY_LABEL="${2:-Discovery entries}"
+  SCAN_SUMMARY_COUNT="0"
+  SCAN_RAW_DISCOVERY=""
+  SCAN_VERIFICATION=""
+}
+
+write_scan_export_file() {
+  local output_file="$1"
+  local raw_content verification_content
+
+  raw_content="$(printf "%s" "$SCAN_RAW_DISCOVERY" | sanitize_for_export | sed '/^[[:space:]]*$/d')"
+  verification_content="$(printf "%s" "$SCAN_VERIFICATION" | sanitize_for_export | sed '/^[[:space:]]*$/d')"
+
+  [[ -z "$raw_content" ]] && raw_content="None"
+  [[ -z "$verification_content" ]] && verification_content="None"
+
+  cat > "$DATA_DIR/$output_file" <<EOF
+========================================
+SCAN: ${SCAN_NAME}
+=================
+
+## SUMMARY
+
+${SCAN_SUMMARY_LABEL}: ${SCAN_SUMMARY_COUNT}
+
+## RAW_DISCOVERY
+
+${raw_content}
+
+## VERIFICATION
+
+${verification_content}
+
+END_SECTION
+EOF
+}
+
 run_scan_and_export() {
   local scan_function="$1"
   local output_file="$2"
-  local start_line
 
-  start_line=$(wc -l < "$LOGFILE")
   "$scan_function"
-
-  if [[ -s "$LOGFILE" ]]; then
-    tail -n "+$((start_line + 1))" "$LOGFILE" > "$DATA_DIR/$output_file"
-  else
-    : > "$DATA_DIR/$output_file"
-  fi
+  write_scan_export_file "$output_file"
 }
 
 print_none_if_empty() {
@@ -508,6 +544,8 @@ print_classification_table() {
 run_dhcp_discover_scan() {
   local tmp_scan scan_pid total_offers first_offer_ip
 
+  init_scan_export_data "DHCP_SCAN"
+
   log_echo ""
   log_echo "========================================"
   log_echo "Rogue DHCP Detection"
@@ -535,25 +573,19 @@ run_dhcp_discover_scan() {
     }
   ' "$tmp_scan")"
 
+  SCAN_SUMMARY_COUNT="${total_offers:-0}"
+  SCAN_RAW_DISCOVERY="$(awk '/DHCPOFFER/ { if (match($0, /([0-9]{1,3}\.){3}[0-9]{1,3}/)) print substr($0, RSTART, RLENGTH) "|67" }' "$tmp_scan" | sort -u)"
+
   if [[ -n "$first_offer_ip" ]]; then
-    log_echo "DHCP Offer detected from: $first_offer_ip"
+    SCAN_VERIFICATION="IP: ${first_offer_ip}
+Port: 67
+Service: DHCP Server
+Status: Offer detected
+
+Offers observed: ${total_offers:-0}"
+  else
+    SCAN_VERIFICATION="None"
   fi
-
-  log_echo "--- RAW DISCOVERY ---"
-  awk '
-    BEGIN { printing=1; block=0 }
-    /Response [0-9]+ of [0-9]+/ {
-      block++
-      if (block > 1) printing=0
-    }
-    printing { print }
-  ' "$tmp_scan" | sed -E 's/^[[:space:]]*[|_]+[[:space:]]*//' | tee -a "$LOGFILE" | colorize_scan_output
-
-  log_echo ""
-  log_echo "--- VERIFICATION ---"
-  log_echo "Offers observed: ${total_offers:-0}"
-  log_echo ""
-  log_echo "--- END DHCP SECTION ---"
 
   rm -f "$tmp_scan"
 
@@ -566,21 +598,26 @@ dhcp_server_count() {
   echo "$output" | grep -c "Server Identifier" || true
 }
 interface_info() {
+  local ip_addr subnet dns
+  init_scan_export_data "INTERFACE_INFO" "Interface entries"
+
   CURRENT_GATEWAY="$(get_gateway)"
-  {
-    echo
-    echo "Interface: $IF"
-    echo "IP: $(ipconfig getifaddr "$IF" 2>/dev/null || echo "N/A")"
-    echo "Subnet: $(ipconfig getoption "$IF" subnet_mask 2>/dev/null || echo "N/A")"
-    echo "Gateway: ${CURRENT_GATEWAY:-N/A}"
-    echo "DNS: $(ipconfig getpacket "$IF" 2>/dev/null | awk -F"[{}]" '/domain_name_server/ {print $2; exit}')"
-    echo "DHCP: $(ipconfig getoption "$IF" server_identifier 2>/dev/null || echo "N/A")"
-    echo
-  } | tee -a "$LOGFILE"
+  ip_addr="$(ipconfig getifaddr "$IF" 2>/dev/null || echo "N/A")"
+  subnet="$(ipconfig getoption "$IF" subnet_mask 2>/dev/null || echo "N/A")"
+  dns="$(ipconfig getpacket "$IF" 2>/dev/null | awk -F"[{}]" '/domain_name_server/ {print $2; exit}')"
+  SCAN_SUMMARY_COUNT="1"
+  SCAN_RAW_DISCOVERY="$IF|$ip_addr|$subnet|${CURRENT_GATEWAY:-N/A}"
+  SCAN_VERIFICATION="Interface: $IF
+IP: $ip_addr
+Subnet: $subnet
+Gateway: ${CURRENT_GATEWAY:-N/A}
+DNS: ${dns:-N/A}
+DHCP: $(ipconfig getoption "$IF" server_identifier 2>/dev/null || echo "N/A")"
 }
 
 gateway_scan() {
   local gw output formatted unique_formatted discovery_count scan_output_file scan_pid
+  init_scan_export_data "GATEWAY_SCAN"
   gw="$(get_gateway)"
 
   scan_output_file="$(mktemp)"
@@ -609,28 +646,19 @@ gateway_scan() {
     discovery_count=0
   fi
 
-  log_echo ""
-  log_echo "## Gateway Scan Results"
-  log_echo ""
-  log_echo "Gateway: $gw"
-  log_echo ""
-  log_echo "Gateway discovery entries: $discovery_count"
-  log_echo ""
-  log_echo "--- RAW DISCOVERY ---"
-  print_none_if_empty "$unique_formatted"
-  log_echo ""
-  log_echo "--- VERIFICATION ---"
-  log_echo ""
-  log_echo "Open Services:"
-  log_echo ""
-
+  SCAN_SUMMARY_COUNT="$discovery_count"
+  SCAN_RAW_DISCOVERY="$(echo "$output" | awk '
+    /^Nmap scan report for / { ip=$NF; gsub(/[()]/, "", ip); next }
+    /^[0-9]+\/(tcp|udp)[[:space:]]+open[[:space:]]+/ { split($1,p,"/"); print ip "|" p[1] }
+  ' | sort -u)"
   if [[ -n "$unique_formatted" ]]; then
-    log_echo "$unique_formatted"
+    SCAN_VERIFICATION="Gateway: $gw
+Open Services:
+$unique_formatted"
   else
-    log_echo "No open services found."
+    SCAN_VERIFICATION="Gateway: $gw
+Open Services: None"
   fi
-
-  log_echo "--- END GATEWAY SECTION ---"
 }
 
 rogue_dhcp() {
@@ -640,63 +668,39 @@ rogue_dhcp() {
 
 find_web_interfaces() {
   local net tmp live_hosts tmp_discovery scan_pid current_ip line port url status found raw_discovery unique_raw_discovery discovery_count
+  local verification_output
   net="$(get_network)"
   tmp="$(mktemp)"
   live_hosts="$(mktemp)"
   raw_discovery="$(mktemp)"
   found=0
-
-  log_echo ""
-  log_echo "Scanning network for web management interfaces..."
-  log_echo "This may take a moment."
-  log_echo ""
-
-  log_echo ""
-  log_echo "Discovering active hosts..."
-  log_echo ""
+  init_scan_export_data "WEB_INTERFACES"
 
   tmp_discovery="$(mktemp)"
-
   nmap -sn "$net" > "$tmp_discovery" &
   scan_pid=$!
-
   spinner $scan_pid
   wait $scan_pid
-
   grep "Nmap scan report for" "$tmp_discovery" | awk '{print $NF}' > "$live_hosts"
-
   rm -f "$tmp_discovery"
 
-  log_echo ""
-  log_echo "## Web Management Interfaces"
-  log_echo ""
-
   if [ ! -s "$live_hosts" ]; then
-    log_echo "Web interface discovery entries: 0"
-    log_echo ""
-    log_echo "--- RAW DISCOVERY ---"
-    log_echo "None discovered on the network."
-    log_echo ""
-    log_echo "--- VERIFICATION ---"
-    log_echo ""
-    log_echo "No active hosts discovered."
-    log_echo "--- END WEB INTERFACES SECTION ---"
+    SCAN_SUMMARY_COUNT="0"
+    SCAN_RAW_DISCOVERY="None"
+    SCAN_VERIFICATION="No active hosts discovered."
     rm -f "$live_hosts" "$tmp" "$raw_discovery"
     return
   fi
 
+  verification_output=""
   nmap -p 80,443,8080,8443 --open -iL "$live_hosts" > "$tmp" 2>/dev/null || true
-
   current_ip=""
   while read -r line; do
     if echo "$line" | grep -q "Nmap scan report for"; then
       current_ip="$(echo "$line" | awk '{print $NF}' | tr -d '()')"
-      log_echo "Checking $current_ip..."
     fi
-
     if echo "$line" | grep -q "open"; then
       port="$(echo "$line" | awk '{print $1}' | cut -d/ -f1)"
-
       case "$port" in
         80) url="http://$current_ip" ;;
         443) url="https://$current_ip" ;;
@@ -704,63 +708,62 @@ find_web_interfaces() {
         8443) url="https://$current_ip:8443" ;;
         *) continue ;;
       esac
-
-      printf "%s|%s\n" "$current_ip" "$port" >> "$raw_discovery"
-      log_echo "Testing $url"
-
-      if curl -k --connect-timeout 2 -s -I "$url" >/dev/null; then
-        status="OK"
-      else
-        status="URL not reachable"
-      fi
-
-      log_echo ""
-      log_echo "IP: $current_ip"
-      log_echo "Port: $port"
-      log_echo "Open in browser:"
-      log_echo "$(printf '\033[34m%s\033[0m' "$url")"
-      log_echo "Status: $status"
-      log_echo "------------------------"
-
+      printf "%s|%s
+" "$current_ip" "$port" >> "$raw_discovery"
+      if curl -k --connect-timeout 2 -s -I "$url" >/dev/null; then status="OK"; else status="URL not reachable"; fi
+      verification_output+="IP: $current_ip\nPort: $port\nURL: $url\nStatus: $status\n\n"
       found=1
     fi
   done < "$tmp"
 
   unique_raw_discovery="$(sort -u "$raw_discovery" 2>/dev/null || true)"
   if [[ -n "$unique_raw_discovery" ]]; then
-    discovery_count="$(printf "%s\n" "$unique_raw_discovery" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+    discovery_count="$(printf "%s
+" "$unique_raw_discovery" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
   else
     discovery_count=0
   fi
 
-  log_echo "Web interface discovery entries: $discovery_count"
-  log_echo ""
-  log_echo "--- RAW DISCOVERY ---"
-  print_none_if_empty "$unique_raw_discovery"
-  log_echo ""
-  log_echo "--- VERIFICATION ---"
-  log_echo ""
-
+  SCAN_SUMMARY_COUNT="$discovery_count"
+  SCAN_RAW_DISCOVERY="$unique_raw_discovery"
   if [[ "$found" -eq 0 ]]; then
-    log_echo "No web management interfaces found."
+    SCAN_VERIFICATION="No web management interfaces found."
+  else
+    SCAN_VERIFICATION="$(printf "%b" "$verification_output")"
   fi
-
-  log_echo "--- END WEB INTERFACES SECTION ---"
 
   rm -f "$live_hosts" "$tmp" "$raw_discovery"
 }
 
 speed_test() {
-  run_scan "Running Internet speed test" "speedtest-cli"
+  local speed_output ping download upload
+  init_scan_export_data "SPEED_TEST"
+  speed_output="$(speedtest-cli 2>/dev/null || true)"
+  ping="$(echo "$speed_output" | awk -F': ' '/Ping:/ {print $2; exit}')"
+  download="$(echo "$speed_output" | awk -F': ' '/Download:/ {print $2; exit}')"
+  upload="$(echo "$speed_output" | awk -F': ' '/Upload:/ {print $2; exit}')"
+
+  SCAN_SUMMARY_LABEL="Metric entries"
+  SCAN_SUMMARY_COUNT="3"
+  SCAN_RAW_DISCOVERY="PING|${ping:-N/A}
+DOWNLOAD|${download:-N/A}
+UPLOAD|${upload:-N/A}"
+  SCAN_VERIFICATION="Ping: ${ping:-N/A}
+Download: ${download:-N/A}
+Upload: ${upload:-N/A}"
 }
 
 scan_dns_servers() {
   local net gw scan_output discovered_services unique_discovered_services discovery_count ip port service_name dns_short dns_stats latency recursion rogue status scan_output_file scan_pid
   net="$(get_network)"
   gw="$(get_gateway)"
+  init_scan_export_data "DNS_SERVERS"
 
   if ! command -v dig >/dev/null 2>&1; then
     print_alert "dig command is required for DNS verification but was not found."
+    SCAN_SUMMARY_COUNT="0"
+    SCAN_RAW_DISCOVERY="None"
+    SCAN_VERIFICATION="dig command not found."
     return
   fi
 
@@ -789,26 +792,21 @@ scan_dns_servers() {
     }
   ')"
 
-  log_echo ""
-  log_echo "## DNS Servers Discovered"
-  log_echo ""
-  unique_discovered_services="$(printf "%s\n" "$discovered_services" | sed '/^[[:space:]]*$/d' | sort -u)"
+  unique_discovered_services="$(printf "%s
+" "$discovered_services" | sed '/^[[:space:]]*$/d' | sort -u)"
   if [[ -n "$unique_discovered_services" ]]; then
-    discovery_count="$(printf "%s\n" "$unique_discovered_services" | wc -l | tr -d ' ')"
+    discovery_count="$(printf "%s
+" "$unique_discovered_services" | wc -l | tr -d ' ')"
   else
     discovery_count=0
   fi
 
-  log_echo "DNS discovery entries: $discovery_count"
-  log_echo ""
-  log_echo "--- RAW DISCOVERY ---"
-  print_none_if_empty "$unique_discovered_services"
-  log_echo ""
-  log_echo "--- VERIFICATION ---"
-  log_echo ""
+  SCAN_SUMMARY_COUNT="$discovery_count"
+  SCAN_RAW_DISCOVERY="$unique_discovered_services"
+  SCAN_VERIFICATION=""
 
   [[ -z "$unique_discovered_services" ]] && {
-    log_echo "--- END DNS SECTION ---"
+    SCAN_VERIFICATION="None"
     return
   }
 
@@ -822,9 +820,10 @@ scan_dns_servers() {
       *) service_name="Unknown DNS Service" ;;
     esac
 
-    log_echo "IP: $ip"
-    log_echo "Service: $service_name"
-    log_echo "Port: $port"
+    SCAN_VERIFICATION+="IP: $ip
+Port: $port
+Service: $service_name
+"
 
     case "$port" in
       53)
@@ -846,44 +845,51 @@ scan_dns_servers() {
           rogue="No"
         fi
 
-        log_echo "Status: $status"
+        SCAN_VERIFICATION+="Status: $status
+"
         if [[ -n "$latency" ]]; then
-          log_echo "Latency: $latency ms"
+          SCAN_VERIFICATION+="Latency: $latency ms
+"
         else
-          log_echo "Latency: N/A"
+          SCAN_VERIFICATION+="Latency: N/A
+"
         fi
-        log_echo "Recursion: $recursion"
-        log_echo "Potential Rogue DNS: $rogue"
+        SCAN_VERIFICATION+="Recursion: $recursion
+Potential Rogue DNS: $rogue
+"
         ;;
       853)
         if command -v timeout >/dev/null 2>&1 && timeout 2 bash -c "echo | openssl s_client -connect $ip:853" >/dev/null 2>&1; then
-          log_echo "Status: DNS over TLS detected"
+          SCAN_VERIFICATION+="Status: DNS over TLS detected
+"
         elif command -v perl >/dev/null 2>&1 && perl -e 'alarm shift; exec @ARGV' 2 bash -c "echo | openssl s_client -connect $ip:853" >/dev/null 2>&1; then
-          log_echo "Status: DNS over TLS detected"
+          SCAN_VERIFICATION+="Status: DNS over TLS detected
+"
         else
-          log_echo "Status: TLS check failed"
+          SCAN_VERIFICATION+="Status: TLS check failed
+"
         fi
         ;;
       443)
         if curl -s --connect-timeout 2 "https://$ip/dns-query" >/dev/null 2>&1; then
-          log_echo "Status: DNS over HTTPS detected"
+          SCAN_VERIFICATION+="Status: DNS over HTTPS detected
+"
         else
-          log_echo "Status: HTTPS DNS endpoint not confirmed"
+          SCAN_VERIFICATION+="Status: HTTPS DNS endpoint not confirmed
+"
         fi
         ;;
     esac
-
-    log_echo ""
-    log_echo "---"
-    log_echo ""
+    SCAN_VERIFICATION+="
+"
   done <<< "$unique_discovered_services"
-
-  log_echo "--- END DNS SECTION ---"
+  SCAN_VERIFICATION="$(printf "%b" "$SCAN_VERIFICATION")"
 }
 
 scan_file_servers() {
   local net scan_output parsed_results unique_parsed_results discovery_count scan_output_file scan_pid
   net="$(get_network)"
+  init_scan_export_data "FILE_SERVERS"
 
   log_echo ""
   log_echo "Scanning network for file servers..."
@@ -907,26 +913,21 @@ scan_file_servers() {
     }
   ')"
 
-  log_echo ""
-  log_echo "## File Servers Discovered"
-  log_echo ""
-  unique_parsed_results="$(printf "%s\n" "$parsed_results" | sed '/^[[:space:]]*$/d' | sort -u)"
+  unique_parsed_results="$(printf "%s
+" "$parsed_results" | sed '/^[[:space:]]*$/d' | sort -u)"
   if [[ -n "$unique_parsed_results" ]]; then
-    discovery_count="$(printf "%s\n" "$unique_parsed_results" | wc -l | tr -d ' ')"
+    discovery_count="$(printf "%s
+" "$unique_parsed_results" | wc -l | tr -d ' ')"
   else
     discovery_count=0
   fi
 
-  log_echo "File server discovery entries: $discovery_count"
-  log_echo ""
-  log_echo "--- RAW DISCOVERY ---"
-  print_none_if_empty "$unique_parsed_results"
-  log_echo ""
-  log_echo "--- VERIFICATION ---"
-  log_echo ""
+  SCAN_SUMMARY_COUNT="$discovery_count"
+  SCAN_RAW_DISCOVERY="$unique_parsed_results"
+  SCAN_VERIFICATION=""
 
   [[ -z "$unique_parsed_results" ]] && {
-    log_echo "--- END FILE SERVER SECTION ---"
+    SCAN_VERIFICATION="None"
     return
   }
 
@@ -944,20 +945,19 @@ scan_file_servers() {
       *) service_name="Unknown File Service" ;;
     esac
 
-    log_echo "IP: $ip"
-    log_echo "Port: $port"
-    log_echo "Service: $service_name"
-    log_echo ""
-    log_echo "---"
-    log_echo ""
-  done <<< "$unique_parsed_results"
+    SCAN_VERIFICATION+="IP: $ip
+Port: $port
+Service: $service_name
 
-  log_echo "--- END FILE SERVER SECTION ---"
+"
+  done <<< "$unique_parsed_results"
+  SCAN_VERIFICATION="$(printf "%b" "$SCAN_VERIFICATION")"
 }
 
 scan_printers() {
   local net scan_output parsed_results unique_parsed_results discovery_count scan_output_file scan_pid printed_ips has_631_ips
   net="$(get_network)"
+  init_scan_export_data "PRINTERS"
   printed_ips=""
   has_631_ips=""
 
@@ -983,26 +983,21 @@ scan_printers() {
     }
   ')"
 
-  log_echo ""
-  log_echo "## Printers Discovered"
-  log_echo ""
-  unique_parsed_results="$(printf "%s\n" "$parsed_results" | sed '/^[[:space:]]*$/d' | sort -u)"
+  unique_parsed_results="$(printf "%s
+" "$parsed_results" | sed '/^[[:space:]]*$/d' | sort -u)"
   if [[ -n "$unique_parsed_results" ]]; then
-    discovery_count="$(printf "%s\n" "$unique_parsed_results" | wc -l | tr -d ' ')"
+    discovery_count="$(printf "%s
+" "$unique_parsed_results" | wc -l | tr -d ' ')"
   else
     discovery_count=0
   fi
 
-  log_echo "Printer discovery entries: $discovery_count"
-  log_echo ""
-  log_echo "--- RAW DISCOVERY ---"
-  print_none_if_empty "$unique_parsed_results"
-  log_echo ""
-  log_echo "--- VERIFICATION ---"
-  log_echo ""
+  SCAN_SUMMARY_COUNT="$discovery_count"
+  SCAN_RAW_DISCOVERY="$unique_parsed_results"
+  SCAN_VERIFICATION=""
 
   if [[ -z "$unique_parsed_results" ]]; then
-    log_echo "--- END PRINTER SECTION ---"
+    SCAN_VERIFICATION="None"
     return
   fi
 
@@ -1042,17 +1037,18 @@ scan_printers() {
       [[ -z "$model" ]] && model="Unknown"
     fi
 
-    log_echo "IP: $ip"
-    log_echo "Model: $model"
-    log_echo "Service: $service_name"
-    log_echo ""
-    log_echo "---"
-    log_echo ""
+    SCAN_VERIFICATION+="IP: $ip
+Port: $port
+Service: $service_name
+Model: $model
+Status: Detected
+
+"
 
     printed_ips="$printed_ips $ip"
   done <<< "$unique_parsed_results"
 
-  log_echo "--- END PRINTER SECTION ---"
+  SCAN_VERIFICATION="$(printf "%b" "$SCAN_VERIFICATION")"
 }
 
 show_menu() {
