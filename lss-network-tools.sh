@@ -4,6 +4,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUTPUT_DIR="$SCRIPT_DIR/output"
+REPORTS_DIR="$SCRIPT_DIR/reports"
 
 OS=""
 SHOW_FUNCTION_HEADER=1
@@ -1302,9 +1303,25 @@ build_report() {
   local json_count
   local report_file
   local timestamp
+  local location
+  local client_name
+  local client_slug
+  local location_slug
   local ran_summary=""
   local missing_summary=""
   local func_id title file_name file_path
+
+  sanitize_for_filename() {
+    local value="$1"
+    value="${value,,}"
+    value="$(echo "$value" | sed 's/[^a-z0-9._-]/-/g; s/-\{2,\}/-/g; s/^-//; s/-$//')"
+
+    if [[ -z "$value" ]]; then
+      value="unknown"
+    fi
+
+    echo "$value"
+  }
 
   json_count="$(find "$OUTPUT_DIR" -maxdepth 1 -type f -name '*.json' | wc -l | awk '{print $1}')"
   if [[ "$json_count" -eq 0 ]]; then
@@ -1313,13 +1330,31 @@ build_report() {
     return
   fi
 
+  read -r -p "Location: " location
+  read -r -p "Client Name: " client_name
+
+  if [[ -z "$location" ]]; then
+    location="Unknown"
+  fi
+
+  if [[ -z "$client_name" ]]; then
+    client_name="Unknown"
+  fi
+
+  client_slug="$(sanitize_for_filename "$client_name")"
+  location_slug="$(sanitize_for_filename "$location")"
+
   timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
-  report_file="$OUTPUT_DIR/network-report-$(date '+%Y%m%d-%H%M%S').txt"
+  report_file="$REPORTS_DIR/lss-network-tools-report-${client_slug}-${location_slug}-$(date '+%Y%m%d-%H%M%S').txt"
+
+  mkdir -p "$REPORTS_DIR"
 
   {
     echo "==============================================="
     echo "     LSS NETWORK TOOLS - HUMAN READABLE REPORT"
     echo "==============================================="
+    echo "Location: $location"
+    echo "Client: $client_name"
     echo "Generated: $timestamp"
     echo "Selected Interface: ${SELECTED_INTERFACE:-unknown}"
     echo
@@ -1502,6 +1537,7 @@ check_existing_output_data() {
 detect_os
 check_tools
 mkdir -p "$OUTPUT_DIR"
+mkdir -p "$REPORTS_DIR"
 check_existing_output_data
 warn_if_not_root
 select_interface
