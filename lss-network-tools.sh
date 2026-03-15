@@ -1019,6 +1019,7 @@ run_task_with_results_output() {
   clear_screen_if_supported
   echo "Running Function: $func_name"
   echo "=============================="
+  echo
   SHOW_FUNCTION_HEADER=0
   run_task_by_id "$func_id"
   SHOW_FUNCTION_HEADER=1
