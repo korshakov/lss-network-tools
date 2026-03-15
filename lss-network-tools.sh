@@ -327,11 +327,21 @@ gateway_details() {
   local ports=()
   local port
 
+  echo
+  echo "Gateway Details"
+  echo "Stage 1: Determining gateway for interface $iface..."
+
   gateway_ip="$(get_gateway_ip "$iface")"
   if [[ -z "$gateway_ip" ]]; then
     echo "Unable to determine default gateway."
     return
   fi
+
+  echo "Done."
+  echo
+  echo "Gateway IP: $gateway_ip"
+  echo
+  echo "Stage 2: Scanning gateway ports (this may take up to 1 minute)..."
 
   local gateway_scan_file
   gateway_scan_file="$(mktemp)"
@@ -355,19 +365,18 @@ gateway_details() {
   ' > "$gateway_scan_file" &
   spinner
   wait
+  echo
 
   while IFS= read -r port; do
     [[ -n "$port" ]] && ports+=("$port")
   done < "$gateway_scan_file"
   rm -f "$gateway_scan_file"
 
-  echo
-  echo "Gateway Details"
-  echo "Gateway IP: $gateway_ip"
+  echo "Open Ports:"
   if [[ "${#ports[@]}" -eq 0 ]]; then
-    echo "Open Ports: none found"
+    echo "none found"
   else
-    echo "Open Ports: ${ports[*]}"
+    printf '%s\n' "${ports[@]}"
   fi
 
   {
@@ -388,10 +397,16 @@ dhcp_network_scan() {
   local idx
   local dhcp_output_file
 
+  echo
+  echo "DHCP Network Scan"
+  echo "Stage 1: Discovering DHCP servers on interface $SELECTED_INTERFACE..."
+
   dhcp_output_file="$(mktemp)"
   sudo nmap --script broadcast-dhcp-discover -e "$SELECTED_INTERFACE" 2>/dev/null > "$dhcp_output_file" &
   spinner
   wait
+  echo
+  echo "Done."
 
   raw_output="$(cat "$dhcp_output_file")"
   rm -f "$dhcp_output_file"
@@ -412,9 +427,8 @@ dhcp_network_scan() {
     done < <(printf "%s\n" "${servers[@]}" | awk '!seen[$0]++')
   fi
 
-  echo
-  echo "DHCP Network Scan"
   echo "DHCP servers found: ${#unique_servers[@]}"
+  echo
 
   {
     echo "{"
@@ -423,17 +437,51 @@ dhcp_network_scan() {
 
     for idx in "${!unique_servers[@]}"; do
       local open_ports=()
+      local dhcp_scan_file
+      local port
       server="${unique_servers[$idx]}"
 
-      echo "  - Scanning DHCP server: $server"
+      if [[ "$idx" -eq 0 ]]; then
+        echo "Stage 2: Inspecting DHCP server(s)"
+      fi
+
+      echo
+      echo "Server $((idx + 1)): $server"
+      echo "Scanning all ports (this may take up to 1 minute)..."
+
+      dhcp_scan_file="$(mktemp)"
+      nmap -p- --open -T4 "$server" -oG - 2>/dev/null | awk '
+        /Ports:/ {
+          split($0, parts, "Ports: ")
+          if (length(parts) < 2) {
+            next
+          }
+
+          n = split(parts[2], ports, ",")
+          for (i = 1; i <= n; i++) {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", ports[i])
+            split(ports[i], fields, "/")
+            if (fields[2] == "open" && fields[1] ~ /^[0-9]+$/) {
+              print fields[1]
+            }
+          }
+        }
+      ' > "$dhcp_scan_file" &
+      spinner
+      wait
+      echo
+
       while IFS= read -r port; do
         [[ -n "$port" ]] && open_ports+=("$port")
-      done < <(scan_open_ports "$server")
+      done < "$dhcp_scan_file"
+      rm -f "$dhcp_scan_file"
 
+      echo "Done."
+      echo "Open Ports:"
       if [[ "${#open_ports[@]}" -eq 0 ]]; then
-        echo "    Open ports: none found"
+        echo "none found"
       else
-        echo "    Open ports: ${open_ports[*]}"
+        printf '%s\n' "${open_ports[@]}"
       fi
 
       echo "    {"
