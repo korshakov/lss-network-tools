@@ -446,11 +446,20 @@ dhcp_network_scan() {
     echo "Server $((idx + 1)): $server"
     echo "Scanning all ports (this may take up to 1 minute)..."
 
-    dhcp_scan_file="$(mktemp)"
-    nmap -p- --open "$server" -oG - > "$dhcp_scan_file" 2>/dev/null &
-    spinner
-    wait
-    echo
+      dhcp_scan_file="$(mktemp)"
+      nmap -p- --open "$server" -oG - > "$dhcp_scan_file" 2>/dev/null &
+      spinner
+      wait
+      echo
+
+      while IFS= read -r port; do
+        [[ -n "$port" ]] && open_ports+=("$port")
+      done < <(awk '
+        /Ports:/ {
+          split($0, parts, "Ports: ")
+          if (length(parts) < 2) {
+            next
+          }
 
     while IFS= read -r port; do
       [[ -n "$port" ]] && open_ports+=("$port")
@@ -469,9 +478,15 @@ dhcp_network_scan() {
             print fields[1]
           }
         }
-      }
-    ' "$dhcp_scan_file")
-    rm -f "$dhcp_scan_file"
+      ' "$dhcp_scan_file")
+      rm -f "$dhcp_scan_file"
+
+      echo "Open Ports:"
+      if [[ "${#open_ports[@]}" -eq 0 ]]; then
+        echo "none found"
+      else
+        printf '%s\n' "${open_ports[@]}"
+      fi
 
     echo "Open Ports:"
     if [[ "${#open_ports[@]}" -eq 0 ]]; then
