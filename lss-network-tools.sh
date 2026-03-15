@@ -425,6 +425,13 @@ dhcp_network_scan() {
   fi
 
   echo "DHCP servers found: ${#unique_servers[@]}"
+
+  if [[ "${#unique_servers[@]}" -gt 0 ]]; then
+    for idx in "${!unique_servers[@]}"; do
+      echo "DHCP IP Address: ${unique_servers[$idx]}"
+    done
+  fi
+
   echo
 
   json_file="$OUTPUT_DIR/dhcp-scan.json"
@@ -482,7 +489,7 @@ dhcp_network_scan() {
     ' "$dhcp_scan_file")
     rm -f "$dhcp_scan_file"
 
-    echo "Open Ports:"
+    echo "Open Ports Of Server $((idx + 1)) ($server):"
     if [[ "${#open_ports[@]}" -eq 0 ]]; then
       echo "none found"
     else
