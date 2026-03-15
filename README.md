@@ -8,11 +8,18 @@ chmod +x *.sh
 
 A small network diagnostic script for macOS and Linux.
 
-It provides three functions for a selected network interface:
+It provides seven functions for a selected network interface:
 
 1. Interface network information (IP, subnet, network range, MAC)
 2. Default gateway details and full open-port scan
 3. DHCP server discovery and full open-port scans for discovered servers
+4. DNS network scan
+5. LDAP/AD Network Scan
+6. SMB/NFS Network Scan
+7. Printer/Print Server Network Scan
+
+Additional utility option:
+- 00) Build Report (creates an ASCII human-readable `.txt` report from available JSON output files, in function order)
 
 All results are printed to the terminal and exported as JSON files.
 
@@ -57,3 +64,8 @@ Files created by menu actions:
 - `output/interface-info.json`
 - `output/gateway-scan.json`
 - `output/dhcp-scan.json`
+- `output/dns-scan.json`
+- `output/ldap-ad-scan.json`
+- `output/smb-nfs-scan.json`
+- `output/print-server-scan.json`
+- `output/network-report-YYYYMMDD-HHMMSS.txt` (generated via option `00`)
