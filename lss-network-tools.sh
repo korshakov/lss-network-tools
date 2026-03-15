@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUTPUT_DIR="$SCRIPT_DIR/output"
 
 OS=""
+SHOW_FUNCTION_HEADER=1
 
 warn_if_not_root() {
   if [[ "$EUID" -ne 0 ]]; then
@@ -263,8 +264,10 @@ interface_info() {
   fi
   network="$(calculate_network "$ip" "$prefix")"
 
-  echo
-  echo "Interface Network Info"
+  if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
+    echo
+    echo "Interface Network Info"
+  fi
   echo "Interface: $iface"
   echo "IP Address: $ip"
   echo "Subnet Mask: $mask"
@@ -388,8 +391,10 @@ scan_servers_by_ports() {
   local json_file
   local result_count=0
 
-  echo
-  echo "$title"
+  if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
+    echo
+    echo "$title"
+  fi
   echo "Stage 1: Getting network range for interface $SELECTED_INTERFACE..."
 
   network="$(get_interface_network_cidr "$SELECTED_INTERFACE")"
@@ -579,8 +584,10 @@ gateway_details() {
   local ports=()
   local port
 
-  echo
-  echo "Gateway Details"
+  if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
+    echo
+    echo "Gateway Details"
+  fi
   echo "Stage 1: Determining gateway for interface $iface..."
 
   gateway_ip="$(get_gateway_ip "$iface")"
@@ -649,8 +656,10 @@ dhcp_network_scan() {
   local dhcp_output_file
   local json_file
 
-  echo
-  echo "DHCP Network Scan"
+  if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
+    echo
+    echo "DHCP Network Scan"
+  fi
   echo "Stage 1: Discovering DHCP servers on interface $SELECTED_INTERFACE..."
 
   dhcp_output_file="$(mktemp)"
@@ -1008,9 +1017,11 @@ run_task_with_results_output() {
   local func_name="$2"
 
   clear_screen_if_supported
-  echo "Results for Function: $func_name"
+  echo "Running Function: $func_name"
   echo "=============================="
+  SHOW_FUNCTION_HEADER=0
   run_task_by_id "$func_id"
+  SHOW_FUNCTION_HEADER=1
   echo
   echo "=============================="
   echo
@@ -1139,35 +1150,41 @@ main_menu() {
   local task_ids=()
   local func_id
   local title
+  local yellow='\033[1;33m'
+  local reset='\033[0m'
 
   read -r -a task_ids <<< "$(get_task_ids)"
 
   while true; do
     echo
-    echo "Selected Interface: $SELECTED_INTERFACE"
-    echo "================================================"
+    printf "${yellow}Selected Interface: %s${reset}\n" "$SELECTED_INTERFACE"
+    printf "${yellow}================================================${reset}\n"
 
     for func_id in "${task_ids[@]}"; do
       title="$(task_title "$func_id")"
       if [[ -n "$title" ]]; then
-        echo "$func_id) $title"
+        printf "${yellow}%s) %s${reset}\n" "$func_id" "$title"
       fi
     done
 
-    echo "================================================"
-    echo "000) $(task_title "000") (This may take a long time.)"
-    echo "00) Build Report"
-    echo "0) Exit"
-    echo "----------------"
+    printf "${yellow}================================================${reset}\n"
+    printf "${yellow}000) %s (This may take a long time.)${reset}\n" "$(task_title "000")"
+    printf "${yellow}00) Build Report${reset}\n"
+    printf "${yellow}0) Exit${reset}\n"
+    printf "${yellow}----------------${reset}\n"
 
     read -r -p "Enter selection: " choice
 
     case "$choice" in
       000)
+        clear_screen_if_supported
+        echo "Running Function: $(task_title "000")"
+        echo "=============================="
         echo
-        echo "Running Complete Network Audit"
-        echo "--------------------------------"
         run_all_tasks
+        echo
+        echo "=============================="
+        echo
         ;;
       00) build_report ;;
       0) exit 0 ;;
