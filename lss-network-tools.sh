@@ -545,11 +545,18 @@ ports_to_json_array() {
 
 spinner() {
   local pid=$!
-  local spin='-\|/'
   local i=0
+  local -a spin_frames
+
+  if [[ "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" == *"UTF-8"* || "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" == *"utf8"* ]]; then
+    spin_frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+  else
+    spin_frames=("-" "\\" "|" "/")
+  fi
+
   while kill -0 "$pid" 2>/dev/null; do
-    i=$(( (i + 1) % 4 ))
-    printf "\r[%c] Scanning..." "${spin:$i:1}"
+    printf "\r[%s] Scanning..." "${spin_frames[$i]}"
+    i=$(( (i + 1) % ${#spin_frames[@]} ))
     sleep 0.2
   done
   printf "\rDone.           \n"
@@ -928,9 +935,15 @@ run_task_with_compact_output() {
   local green='\033[0;32m'
   local red='\033[0;31m'
   local reset='\033[0m'
-  local spin='-|/'
   local i=0
   local pid
+  local -a spin_frames
+
+  if [[ "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" == *"UTF-8"* || "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" == *"utf8"* ]]; then
+    spin_frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+  else
+    spin_frames=("-" "\\" "|" "/")
+  fi
 
   printf "Running Function %s (%s): " "$func_id" "$func_name"
 
@@ -938,8 +951,8 @@ run_task_with_compact_output() {
   pid=$!
 
   while kill -0 "$pid" 2>/dev/null; do
-    printf "\rRunning Function %s (%s): %c" "$func_id" "$func_name" "${spin:$i:1}"
-    i=$(((i + 1) % 3))
+    printf "\rRunning Function %s (%s): %s" "$func_id" "$func_name" "${spin_frames[$i]}"
+    i=$(( (i + 1) % ${#spin_frames[@]} ))
     sleep 0.2
   done
 
