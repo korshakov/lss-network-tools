@@ -308,6 +308,226 @@ scan_open_ports() {
   '
 }
 
+get_interface_network_cidr() {
+  local iface="$1"
+  local ip=""
+  local mask=""
+  local prefix=""
+
+  if [[ "$OS" == "macos" ]]; then
+    ip="$(ipconfig getifaddr "$iface" 2>/dev/null || true)"
+    mask="$(ipconfig getoption "$iface" subnet_mask 2>/dev/null || true)"
+    if [[ -z "$mask" ]]; then
+      local hexmask
+      hexmask="$(ifconfig "$iface" | awk '/inet /{for(i=1;i<=NF;i++) if($i=="netmask") {print $(i+1); exit}}')"
+      if [[ "$hexmask" =~ ^0x ]]; then
+        mask="$(printf "%d.%d.%d.%d" "$((16#${hexmask:2:2}))" "$((16#${hexmask:4:2}))" "$((16#${hexmask:6:2}))" "$((16#${hexmask:8:2}))")"
+      fi
+    fi
+  else
+    local ip_cidr
+    ip_cidr="$(ip -o -4 addr show dev "$iface" scope global | awk '{print $4; exit}')"
+    if [[ -n "$ip_cidr" ]]; then
+      ip="${ip_cidr%/*}"
+      prefix="${ip_cidr#*/}"
+      mask="$(cidr_to_mask "$prefix")"
+    elif command -v ifconfig >/dev/null 2>&1; then
+      ip="$(ifconfig "$iface" | awk '/inet /{print $2; exit}')"
+      mask="$(ifconfig "$iface" | awk '/inet /{for(i=1;i<=NF;i++) if($i=="netmask") {print $(i+1); exit}}')"
+    fi
+  fi
+
+  if [[ -z "$ip" || -z "$mask" ]]; then
+    return 1
+  fi
+
+  if [[ -z "$prefix" ]]; then
+    prefix="$(mask_to_prefix "$mask")"
+  fi
+
+  calculate_network "$ip" "$prefix"
+}
+
+label_port_service() {
+  case "$1" in
+    88) echo "kerberos" ;;
+    111) echo "rpcbind" ;;
+    139) echo "smb-netbios" ;;
+    389) echo "ldap" ;;
+    445) echo "smb" ;;
+    53) echo "dns" ;;
+    515) echo "printer-lpd" ;;
+    631) echo "printer-ipp" ;;
+    636) echo "ldaps" ;;
+    9100) echo "printer-jetdirect" ;;
+    2049) echo "nfs" ;;
+    3268) echo "ldap-global-catalog" ;;
+    3269) echo "ldaps-global-catalog" ;;
+    *) echo "port-$1" ;;
+  esac
+}
+
+scan_servers_by_ports() {
+  local title="$1"
+  local description="$2"
+  local port_list="$3"
+  local output_file="$4"
+  local network
+  local scan_file
+  local json_file
+  local result_count=0
+
+  echo
+  echo "$title"
+  echo "Stage 1: Getting network range for interface $SELECTED_INTERFACE..."
+
+  network="$(get_interface_network_cidr "$SELECTED_INTERFACE")"
+  if [[ -z "$network" ]]; then
+    echo "Unable to determine network range for $SELECTED_INTERFACE"
+    return
+  fi
+
+  echo "Done."
+  echo "Network Range: $network"
+  echo
+  echo "Stage 2: Scanning $description ports ($port_list)..."
+
+  scan_file="$(mktemp)"
+  nmap -n -p "$port_list" --open "$network" -oG - > "$scan_file" 2>/dev/null &
+  spinner
+  wait
+
+  json_file="$OUTPUT_DIR/$output_file"
+  {
+    echo "{"
+    echo "  \"network\": \"$network\"," 
+    echo "  \"scan_ports\": \"$port_list\"," 
+    echo "  \"servers\": ["
+  } > "$json_file"
+
+  while IFS='|' read -r host_ip open_ports; do
+    local ports_array=()
+    local service_names=()
+    local port
+    local i
+
+    if [[ -n "$open_ports" ]]; then
+      while IFS= read -r port; do
+        [[ -n "$port" ]] && ports_array+=("$port")
+      done < <(echo "$open_ports" | tr ',' '\n' | sed '/^$/d')
+    fi
+
+    if [[ "${#ports_array[@]}" -eq 0 ]]; then
+      continue
+    fi
+
+    for i in "${!ports_array[@]}"; do
+      service_names+=("$(label_port_service "${ports_array[$i]}")")
+    done
+
+    if (( result_count > 0 )); then
+      echo "    ," >> "$json_file"
+    fi
+
+    {
+      echo "    {"
+      echo "      \"ip\": \"$host_ip\"," 
+      echo "      \"open_ports\": $(ports_to_json_array "${ports_array[@]}"),"
+      printf "      \"detected_services\": ["
+      for i in "${!service_names[@]}"; do
+        if (( i > 0 )); then
+          printf ", "
+        fi
+        printf '"%s"' "${service_names[$i]}"
+      done
+      echo "]"
+      echo "    }"
+    } >> "$json_file"
+
+    echo "Server: $host_ip"
+    echo "Open Ports: ${ports_array[*]}"
+    echo "Detected Services: ${service_names[*]}"
+    echo
+
+    result_count=$((result_count + 1))
+  done < <(awk '
+    /Host: / && /Ports: / {
+      ip = ""
+      if (match($0, /Host: ([0-9]+(\.[0-9]+){3})/, m)) {
+        ip = m[1]
+      }
+      if (ip == "") {
+        next
+      }
+
+      split($0, parts, "Ports: ")
+      if (length(parts) < 2) {
+        next
+      }
+
+      n = split(parts[2], p, ",")
+      open = ""
+      for (i = 1; i <= n; i++) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", p[i])
+        split(p[i], f, "/")
+        if (f[2] == "open" && f[1] ~ /^[0-9]+$/) {
+          if (open != "") {
+            open = open ","
+          }
+          open = open f[1]
+        }
+      }
+
+      if (open != "") {
+        print ip "|" open
+      }
+    }
+  ' "$scan_file")
+
+  rm -f "$scan_file"
+
+  {
+    echo "  ]"
+    echo "}"
+  } >> "$json_file"
+
+  echo "$title results found: $result_count"
+  echo "Saved JSON: $json_file"
+}
+
+
+detect_dns_servers() {
+  scan_servers_by_ports \
+    "DNS Network Scan" \
+    "DNS" \
+    "53" \
+    "dns-scan.json"
+}
+
+detect_ldap_servers() {
+  scan_servers_by_ports \
+    "LDAP/AD Network Scan" \
+    "LDAP/AD" \
+    "88,389,636,3268,3269" \
+    "ldap-ad-scan.json"
+}
+
+detect_smb_nfs_servers() {
+  scan_servers_by_ports \
+    "SMB/NFS Network Scan" \
+    "SMB/NFS" \
+    "111,139,445,2049" \
+    "smb-nfs-scan.json"
+}
+
+detect_print_servers() {
+  scan_servers_by_ports \
+    "Printer/Print Server Network Scan" \
+    "Printer/Print Server" \
+    "515,631,9100" \
+    "print-server-scan.json"
+}
+
 ports_to_json_array() {
   local values=("$@")
   local json=""
@@ -529,6 +749,241 @@ dhcp_network_scan() {
   echo "Saved JSON: $json_file"
 }
 
+
+json_get_string_value() {
+  local key="$1"
+  local file="$2"
+  awk -F'"' -v k="$key" '$2 == k { print $4; exit }' "$file"
+}
+
+json_get_numeric_array() {
+  local key="$1"
+  local file="$2"
+  awk -v k="$key" '
+    index($0, "\"" k "\"") {
+      line = $0
+      sub(/^.*\[/, "", line)
+      sub(/\].*$/, "", line)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      print line
+      exit
+    }
+  ' "$file"
+}
+
+render_interface_info_report() {
+  local file="$1"
+  local report_file="$2"
+  local iface ip subnet network mac
+
+  iface="$(json_get_string_value "interface" "$file")"
+  ip="$(json_get_string_value "ip_address" "$file")"
+  subnet="$(json_get_string_value "subnet" "$file")"
+  network="$(json_get_string_value "network" "$file")"
+  mac="$(json_get_string_value "mac_address" "$file")"
+
+  {
+    echo "Interface: ${iface:-unknown}"
+    echo "IP Address: ${ip:-unknown}"
+    echo "Subnet Mask: ${subnet:-unknown}"
+    echo "Network Range: ${network:-unknown}"
+    echo "MAC Address: ${mac:-unknown}"
+  } >> "$report_file"
+}
+
+render_gateway_report() {
+  local file="$1"
+  local report_file="$2"
+  local gateway ports
+
+  gateway="$(json_get_string_value "gateway_ip" "$file")"
+  ports="$(json_get_numeric_array "open_ports" "$file")"
+
+  {
+    echo "Gateway IP: ${gateway:-unknown}"
+    if [[ -n "$ports" ]]; then
+      echo "Open Ports: $ports"
+    else
+      echo "Open Ports: none found"
+    fi
+  } >> "$report_file"
+}
+
+render_dhcp_report() {
+  local file="$1"
+  local report_file="$2"
+  local found
+
+  found="$(awk -F': ' '/"dhcp_servers_found"/ {gsub(/,/, "", $2); print $2; exit}' "$file")"
+
+  echo "DHCP Servers Found: ${found:-0}" >> "$report_file"
+
+  awk -F'"' '
+    /"ip":/ {
+      ip = $4
+      next
+    }
+    /"open_ports":/ {
+      line = $0
+      sub(/^.*\[/, "", line)
+      sub(/\].*$/, "", line)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      if (line == "") {
+        line = "none found"
+      }
+      printf("- DHCP Server %s | Open Ports: %s\n", ip, line)
+    }
+  ' "$file" >> "$report_file"
+}
+
+render_generic_network_scan_report() {
+  local file="$1"
+  local report_file="$2"
+  local label="$3"
+  local network ports server_count
+
+  network="$(json_get_string_value "network" "$file")"
+  ports="$(json_get_string_value "scan_ports" "$file")"
+  server_count="$(awk -F'"' '/"ip":/ {count++} END {print count+0}' "$file")"
+
+  {
+    echo "Network Range: ${network:-unknown}"
+    echo "Scanned Ports: ${ports:-unknown}"
+    echo "Servers Found: $server_count"
+  } >> "$report_file"
+
+  awk -F'"' -v lbl="$label" '
+    /"ip":/ {
+      ip = $4
+      next
+    }
+    /"open_ports":/ {
+      ports_line = $0
+      sub(/^.*\[/, "", ports_line)
+      sub(/\].*$/, "", ports_line)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", ports_line)
+      if (ports_line == "") {
+        ports_line = "none found"
+      }
+      next
+    }
+    /"detected_services":/ {
+      services_line = $0
+      sub(/^.*\[/, "", services_line)
+      sub(/\].*$/, "", services_line)
+      gsub(/"/, "", services_line)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", services_line)
+      if (services_line == "") {
+        services_line = "unknown"
+      }
+      printf("- %s Host %s | Open Ports: %s | Services: %s\n", lbl, ip, ports_line, services_line)
+    }
+  ' "$file" >> "$report_file"
+}
+
+build_report() {
+  local json_count
+  local report_file
+  local timestamp
+  local ran_summary=""
+  local missing_summary=""
+  local func_id title file_path
+
+  json_count="$(find "$OUTPUT_DIR" -maxdepth 1 -type f -name '*.json' | wc -l | awk '{print $1}')"
+  if [[ "$json_count" -eq 0 ]]; then
+    echo "No JSON scan files found in $OUTPUT_DIR"
+    echo "Run some scans first, then choose 00) Build Report again."
+    return
+  fi
+
+  timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+  report_file="$OUTPUT_DIR/network-report-$(date '+%Y%m%d-%H%M%S').txt"
+
+  {
+    echo "==============================================="
+    echo "     LSS NETWORK TOOLS - HUMAN READABLE REPORT"
+    echo "==============================================="
+    echo "Generated: $timestamp"
+    echo "Selected Interface: ${SELECTED_INTERFACE:-unknown}"
+    echo
+  } > "$report_file"
+
+  for func_id in 1 2 3 4 5 6 7; do
+    case "$func_id" in
+      1) title="Interface Network Info"; file_path="$OUTPUT_DIR/interface-info.json" ;;
+      2) title="Gateway Details"; file_path="$OUTPUT_DIR/gateway-scan.json" ;;
+      3) title="DHCP Network Scan"; file_path="$OUTPUT_DIR/dhcp-scan.json" ;;
+      4) title="DNS Network Scan"; file_path="$OUTPUT_DIR/dns-scan.json" ;;
+      5) title="LDAP/AD Network Scan"; file_path="$OUTPUT_DIR/ldap-ad-scan.json" ;;
+      6) title="SMB/NFS Network Scan"; file_path="$OUTPUT_DIR/smb-nfs-scan.json" ;;
+      7) title="Printer/Print Server Network Scan"; file_path="$OUTPUT_DIR/print-server-scan.json" ;;
+    esac
+
+    if [[ -f "$file_path" ]]; then
+      ran_summary+="[x] ${func_id}) ${title}"$'\n'
+    else
+      missing_summary+="[ ] ${func_id}) ${title}"$'\n'
+    fi
+  done
+
+  {
+    echo "Executed Functions"
+    echo "------------------"
+    if [[ -n "$ran_summary" ]]; then
+      printf "%b" "$ran_summary"
+    else
+      echo "none"
+    fi
+    echo
+    echo "Not Executed"
+    echo "------------"
+    if [[ -n "$missing_summary" ]]; then
+      printf "%b" "$missing_summary"
+    else
+      echo "none"
+    fi
+    echo
+  } >> "$report_file"
+
+  for func_id in 1 2 3 4 5 6 7; do
+    case "$func_id" in
+      1) title="Interface Network Info"; file_path="$OUTPUT_DIR/interface-info.json" ;;
+      2) title="Gateway Details"; file_path="$OUTPUT_DIR/gateway-scan.json" ;;
+      3) title="DHCP Network Scan"; file_path="$OUTPUT_DIR/dhcp-scan.json" ;;
+      4) title="DNS Network Scan"; file_path="$OUTPUT_DIR/dns-scan.json" ;;
+      5) title="LDAP/AD Network Scan"; file_path="$OUTPUT_DIR/ldap-ad-scan.json" ;;
+      6) title="SMB/NFS Network Scan"; file_path="$OUTPUT_DIR/smb-nfs-scan.json" ;;
+      7) title="Printer/Print Server Network Scan"; file_path="$OUTPUT_DIR/print-server-scan.json" ;;
+    esac
+
+    {
+      echo "================================================"
+      echo "Function $func_id) $title"
+      echo "================================================"
+    } >> "$report_file"
+
+    if [[ ! -f "$file_path" ]]; then
+      echo "Not run (no $file_path found)." >> "$report_file"
+      echo >> "$report_file"
+      continue
+    fi
+
+    case "$func_id" in
+      1) render_interface_info_report "$file_path" "$report_file" ;;
+      2) render_gateway_report "$file_path" "$report_file" ;;
+      3) render_dhcp_report "$file_path" "$report_file" ;;
+      4) render_generic_network_scan_report "$file_path" "$report_file" "DNS" ;;
+      5) render_generic_network_scan_report "$file_path" "$report_file" "LDAP/AD" ;;
+      6) render_generic_network_scan_report "$file_path" "$report_file" "SMB/NFS" ;;
+      7) render_generic_network_scan_report "$file_path" "$report_file" "Printer" ;;
+    esac
+
+    echo >> "$report_file"
+  done
+
+  echo "Report built successfully: $report_file"
+}
+
 main_menu() {
   local choice
   while true; do
@@ -537,6 +992,11 @@ main_menu() {
     echo "1) Interface Network Info"
     echo "2) Gateway Details"
     echo "3) DHCP Network Scan"
+    echo "4) DNS Network Scan"
+    echo "5) LDAP/AD Network Scan"
+    echo "6) SMB/NFS Network Scan"
+    echo "7) Printer/Print Server Network Scan"
+    echo "00) Build Report"
     echo "0) Exit"
 
     read -r -p "Enter selection: " choice
@@ -545,6 +1005,11 @@ main_menu() {
       1) interface_info "$SELECTED_INTERFACE" ;;
       2) gateway_details "$SELECTED_INTERFACE" ;;
       3) dhcp_network_scan ;;
+      4) detect_dns_servers ;;
+      5) detect_ldap_servers ;;
+      6) detect_smb_nfs_servers ;;
+      7) detect_print_servers ;;
+      00) build_report ;;
       0) exit 0 ;;
       *) echo "Invalid selection. Try again." ;;
     esac
