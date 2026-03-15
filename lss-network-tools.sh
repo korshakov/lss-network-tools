@@ -390,7 +390,6 @@ gateway_details() {
 }
 
 dhcp_network_scan() {
-  local raw_output
   local servers=()
   local unique_servers=()
   local server
@@ -402,24 +401,21 @@ dhcp_network_scan() {
   echo "Stage 1: Discovering DHCP servers on interface $SELECTED_INTERFACE..."
 
   dhcp_output_file="$(mktemp)"
-  sudo nmap --script broadcast-dhcp-discover -e "$SELECTED_INTERFACE" 2>/dev/null > "$dhcp_output_file" &
+  sudo nmap --script broadcast-dhcp-discover -e "$SELECTED_INTERFACE" > "$dhcp_output_file" 2>/dev/null &
   spinner
   wait
-  echo
-  echo "Done."
-
-  raw_output="$(cat "$dhcp_output_file")"
-  rm -f "$dhcp_output_file"
 
   while IFS= read -r server; do
     [[ -n "$server" ]] && servers+=("$server")
-  done < <(echo "$raw_output" | awk '/Server Identifier:/ {
+  done < <(awk '/Server Identifier:/ {
     for(i=1;i<=NF;i++) {
       if($i ~ /^[0-9]+(\.[0-9]+){3}$/) {
         print $i
       }
     }
-  }')
+  }' "$dhcp_output_file")
+
+  rm -f "$dhcp_output_file"
 
   if [[ "${#servers[@]}" -gt 0 ]]; then
     while IFS= read -r server; do
@@ -450,7 +446,14 @@ dhcp_network_scan() {
       echo "Scanning all ports (this may take up to 1 minute)..."
 
       dhcp_scan_file="$(mktemp)"
-      nmap -p- --open -T4 "$server" -oG - 2>/dev/null | awk '
+      nmap -p- --open "$server" -oG - > "$dhcp_scan_file" 2>/dev/null &
+      spinner
+      wait
+      echo
+
+      while IFS= read -r port; do
+        [[ -n "$port" ]] && open_ports+=("$port")
+      done < <(awk '
         /Ports:/ {
           split($0, parts, "Ports: ")
           if (length(parts) < 2) {
@@ -466,17 +469,9 @@ dhcp_network_scan() {
             }
           }
         }
-      ' > "$dhcp_scan_file" &
-      spinner
-      wait
-      echo
-
-      while IFS= read -r port; do
-        [[ -n "$port" ]] && open_ports+=("$port")
-      done < "$dhcp_scan_file"
+      ' "$dhcp_scan_file")
       rm -f "$dhcp_scan_file"
 
-      echo "Done."
       echo "Open Ports:"
       if [[ "${#open_ports[@]}" -eq 0 ]]; then
         echo "none found"
