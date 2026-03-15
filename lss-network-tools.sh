@@ -13,6 +13,16 @@ warn_if_not_root() {
   fi
 }
 
+clear_screen_if_supported() {
+  if [[ -t 1 ]]; then
+    if command -v clear >/dev/null 2>&1 && [[ -n "${TERM:-}" && "${TERM:-}" != "dumb" ]]; then
+      clear
+    else
+      printf '\033[2J\033[H'
+    fi
+  fi
+}
+
 print_install_hint() {
   local tool="$1"
   if [[ "$OS" == "macos" ]]; then
@@ -148,13 +158,7 @@ select_interface() {
 
     if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#interfaces[@]} )); then
       SELECTED_INTERFACE="${interfaces[$((choice - 1))]}"
-      if [[ -t 1 ]]; then
-        if command -v clear >/dev/null 2>&1 && [[ -n "${TERM:-}" && "${TERM:-}" != "dumb" ]]; then
-          clear
-        else
-          printf '\033[2J\033[H'
-        fi
-      fi
+      clear_screen_if_supported
       return
     fi
 
@@ -999,13 +1003,17 @@ run_task_with_compact_output() {
   fi
 }
 
-print_task_start_header() {
-  local func_name="$1"
-  local header="Running Function: $func_name"
+run_task_with_results_output() {
+  local func_id="$1"
+  local func_name="$2"
 
+  clear_screen_if_supported
+  echo "Results for Function: $func_name"
+  echo "=============================="
+  run_task_by_id "$func_id"
   echo
-  echo "$header"
-  printf '%*s\n' "${#header}" '' | tr ' ' '-'
+  echo "=============================="
+  echo
 }
 
 run_all_tasks() {
@@ -1169,8 +1177,7 @@ main_menu() {
           if [[ -z "$title" ]]; then
             title="Function $choice"
           fi
-          print_task_start_header "$title"
-          run_task_by_id "$choice"
+          run_task_with_results_output "$choice" "$title"
         else
           echo "Invalid selection. Try again."
         fi
