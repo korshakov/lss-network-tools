@@ -653,22 +653,43 @@ spinner_line() {
   done
 }
 
-extract_speedtest_value() {
-  local key="$1"
-  local file="$2"
-  awk -F': ' -v k="$key" '$1 == k {print $2; exit}' "$file"
+extract_speedtest_object_string() {
+  local object_key="$1"
+  local value_key="$2"
+  local file="$3"
+  sed -nE "s/.*\"${object_key}\"[[:space:]]*:[[:space:]]*\{[^}]*\"${value_key}\"[[:space:]]*:[[:space:]]*\"([^\"]*)\".*/\1/p" "$file" | head -n1
+}
+
+extract_speedtest_object_number() {
+  local object_key="$1"
+  local value_key="$2"
+  local file="$3"
+  sed -nE "s/.*\"${object_key}\"[[:space:]]*:[[:space:]]*\{[^}]*\"${value_key}\"[[:space:]]*:[[:space:]]*([0-9.]+).*/\1/p" "$file" | head -n1
+}
+
+bytes_per_second_to_mbps() {
+  local value="$1"
+
+  if [[ -z "$value" ]]; then
+    echo ""
+    return
+  fi
+
+  awk -v bps="$value" 'BEGIN { printf "%.2f Mbps", (bps * 8) / 1000000 }'
 }
 
 render_speed_test_report() {
   local file="$1"
   local report_file="$2"
-  local server download upload
+  local server download upload public_ip
 
   server="$(json_get_string_value "connected_server" "$file")"
   download="$(json_get_string_value "download_speed" "$file")"
   upload="$(json_get_string_value "upload_speed" "$file")"
+  public_ip="$(json_get_string_value "public_ip" "$file")"
 
   {
+    echo "Public IP: ${public_ip:-unknown}"
     echo "Connected to server: ${server:-unknown}"
     echo "Measuring Download speed: ${download:-unavailable}"
     echo "Upload Speed: ${upload:-unavailable}"
@@ -676,11 +697,13 @@ render_speed_test_report() {
 }
 
 internet_speed_test() {
-  local download_output
-  local upload_output
+  local speedtest_output
   local download_speed
   local upload_speed
   local server_name
+  local public_ip
+  local download_bandwidth
+  local upload_bandwidth
   local pid
 
   if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
@@ -698,44 +721,47 @@ internet_speed_test() {
     return 1
   fi
 
-  download_output="$(mktemp)"
-  upload_output="$(mktemp)"
+  speedtest_output="$(mktemp)"
 
-  speedtest --accept-license --accept-gdpr --progress=no --no-upload > "$download_output" 2>/dev/null &
+  speedtest --accept-license --accept-gdpr --progress=no --format=json > "$speedtest_output" 2>/dev/null &
   pid=$!
-  spinner_line "$pid" "Measuring Download speed:"
+  spinner_line "$pid" "Running speed test:"
   wait "$pid"
 
-  server_name="$(extract_speedtest_value "Server" "$download_output")"
-  download_speed="$(extract_speedtest_value "Download" "$download_output")"
+  public_ip="$(extract_speedtest_object_string "interface" "externalIp" "$speedtest_output")"
+  server_name="$(extract_speedtest_object_string "server" "name" "$speedtest_output")"
+  download_bandwidth="$(extract_speedtest_object_number "download" "bandwidth" "$speedtest_output")"
+  upload_bandwidth="$(extract_speedtest_object_number "upload" "bandwidth" "$speedtest_output")"
+
+  download_speed="$(bytes_per_second_to_mbps "$download_bandwidth")"
+  upload_speed="$(bytes_per_second_to_mbps "$upload_bandwidth")"
 
   if [[ -z "$server_name" ]]; then
     server_name="unknown"
+  fi
+
+  if [[ -z "$public_ip" ]]; then
+    public_ip="unknown"
   fi
 
   if [[ -z "$download_speed" ]]; then
     download_speed="unavailable"
   fi
 
-  speedtest --accept-license --accept-gdpr --progress=no --no-download > "$upload_output" 2>/dev/null &
-  pid=$!
-  printf "\rConnected to server: %s\n" "$server_name"
-  printf "Measuring Download speed: %s\n" "$download_speed"
-  spinner_line "$pid" "Upload Speed:"
-  wait "$pid"
-
-  upload_speed="$(extract_speedtest_value "Upload" "$upload_output")"
-
-  rm -f "$download_output" "$upload_output"
-
   if [[ -z "$upload_speed" ]]; then
     upload_speed="unavailable"
   fi
 
+  printf "\rPublic IP: %s\n" "$public_ip"
+  printf "\rConnected to server: %s\n" "$server_name"
+  printf "Measuring Download speed: %s\n" "$download_speed"
   printf "\rUpload Speed: %s\n" "$upload_speed"
+
+  rm -f "$speedtest_output"
 
   cat > "$OUTPUT_DIR/internet-speed-test.json" <<JSON
 {
+  "public_ip": "$public_ip",
   "connected_server": "$server_name",
   "download_speed": "$download_speed",
   "upload_speed": "$upload_speed"
