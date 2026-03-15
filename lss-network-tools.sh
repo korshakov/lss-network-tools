@@ -350,17 +350,6 @@ interface_info() {
 
   mkdir -p "$OUTPUT_DIR"
 
-  cat > "$OUTPUT_DIR/interface-info.json" <<JSON
-{
-  "interface": "$iface",
-  "ip_address": "$ip",
-  "subnet": "$mask",
-  "network": "$network",
-  "gateway": "$gateway",
-  "mac_address": "$mac"
-}
-JSON
-
   cat > "$OUTPUT_DIR/interface-network-info.json" <<JSON
 {
   "interface": "$iface",
@@ -372,10 +361,9 @@ JSON
 }
 JSON
 
-  validate_json_file "$OUTPUT_DIR/interface-info.json"
   validate_json_file "$OUTPUT_DIR/interface-network-info.json"
 
-  echo "Saved JSON: $OUTPUT_DIR/interface-info.json"
+  echo "Saved JSON: $OUTPUT_DIR/interface-network-info.json"
 }
 
 get_gateway_ip() {
@@ -1015,9 +1003,6 @@ gateway_stress_test() {
   interface_info "$SELECTED_INTERFACE"
 
   interface_info_file="$OUTPUT_DIR/interface-network-info.json"
-  if [[ ! -f "$interface_info_file" ]]; then
-    interface_info_file="$OUTPUT_DIR/interface-info.json"
-  fi
 
   if [[ ! -f "$interface_info_file" ]]; then
     echo "Gateway could not be detected."
@@ -1496,7 +1481,7 @@ render_generic_network_scan_report() {
 
 get_task_ids() {
   awk -F'|' 'NF {print $1}' <<'TASKS' | paste -sd' ' -
-1|Interface Network Info|interface-info.json
+1|Interface Network Info|interface-network-info.json
 2|Internet Speed Test|internet-speed-test.json
 3|Gateway Details|gateway-scan.json
 4|DHCP Network Scan|dhcp-scan.json
@@ -1517,7 +1502,7 @@ task_title() {
   fi
 
   awk -F'|' -v id="$task_id" '$1 == id {print $2; exit}' <<'TASKS'
-1|Interface Network Info|interface-info.json
+1|Interface Network Info|interface-network-info.json
 2|Internet Speed Test|internet-speed-test.json
 3|Gateway Details|gateway-scan.json
 4|DHCP Network Scan|dhcp-scan.json
@@ -1532,7 +1517,7 @@ TASKS
 task_output_file() {
   local task_id="$1"
   awk -F'|' -v id="$task_id" '$1 == id {print $3; exit}' <<'TASKS'
-1|Interface Network Info|interface-info.json
+1|Interface Network Info|interface-network-info.json
 2|Internet Speed Test|internet-speed-test.json
 3|Gateway Details|gateway-scan.json
 4|DHCP Network Scan|dhcp-scan.json
@@ -1678,7 +1663,7 @@ build_report() {
       return
     fi
 
-    interface_info_file="$OUTPUT_DIR/interface-info.json"
+    interface_info_file="$OUTPUT_DIR/interface-network-info.json"
     if [[ -f "$interface_info_file" ]]; then
       detected_iface="$(json_get_string_value "interface" "$interface_info_file")"
       if [[ -n "$detected_iface" ]]; then
