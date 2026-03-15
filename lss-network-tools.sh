@@ -1367,17 +1367,15 @@ build_report() {
     fi
     file_path="$OUTPUT_DIR/$file_name"
 
+    if [[ ! -f "$file_path" ]]; then
+      continue
+    fi
+
     {
       echo "================================================"
       echo "Function $func_id) $title"
       echo "================================================"
     } >> "$report_file"
-
-    if [[ ! -f "$file_path" ]]; then
-      echo "Not run (no $file_path found)." >> "$report_file"
-      echo >> "$report_file"
-      continue
-    fi
 
     case "$func_id" in
       1) render_interface_info_report "$file_path" "$report_file" ;;
