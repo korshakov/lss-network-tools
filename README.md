@@ -58,6 +58,8 @@ High-impact warning:
 - **Progress indicators/spinners** for long-running scan stages.
 - **Speedtest timeout protection** (fails gracefully if it takes too long).
 - **JSON output for every scan** for automation and post-processing.
+- **Per-run `manifest.json`** summarizing run metadata and all generated artifacts.
+- **Raw evidence capture** under `raw/` for scan source output such as `nmap`, `speedtest-cli`, DHCP discovery, and stress-test ping stages.
 - **DHCP evidence capture** with unique responders, raw offer counts, and optional relay/proxy source visibility when `tcpdump` is available.
 - **Per-run debug log** captured as `debug.txt` in the run folder for troubleshooting.
 - **Optional `--debug` mode** that disables spinner redraws and keeps debug output easier to read.
@@ -127,14 +129,22 @@ Possible files inside a run folder:
 - `gateway-stress-test.json`
 - `custom-target-port-scan.json`
 - `custom-target-stress-test.json`
+- `manifest.json`
 - `debug.txt`
 - `lss-network-tools-report-<client>-<location>-DD-MM-YYYY-HH-MM.txt`
+- `raw/`
 
 The report includes:
 
 - Header metadata (location, client, timestamp, selected interface)
 - Executed vs not-executed function summary
 - Per-function sections generated from available JSON scan files
+
+The manifest includes:
+
+- Run metadata (client, location, selected interface, generated time)
+- Task list with expected JSON outputs
+- Artifact inventory for JSON, report, debug, and raw evidence files
 
 ## Notes
 

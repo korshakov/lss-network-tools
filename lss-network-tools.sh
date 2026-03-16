@@ -15,6 +15,7 @@ RUN_REPORT_FILE=""
 HIGH_IMPACT_STRESS_CONFIRMED=0
 SESSION_DEBUG_LOG=""
 RUN_DEBUG_LOG=""
+RUN_MANIFEST_FILE=""
 OUTPUT_IS_TTY=0
 DEBUG_MODE=0
 
@@ -118,6 +119,10 @@ current_output_dir() {
   fi
 }
 
+current_raw_output_dir() {
+  printf '%s/raw\n' "$(current_output_dir)"
+}
+
 initialize_debug_logging() {
   if [[ -n "$SESSION_DEBUG_LOG" ]]; then
     return
@@ -158,6 +163,27 @@ task_output_path() {
   fi
 
   printf '%s/%s\n' "$(current_output_dir)" "$output_file"
+}
+
+task_raw_prefix() {
+  local task_id="$1"
+  local output_file
+
+  output_file="$(task_output_file "$task_id")"
+  if [[ -z "$output_file" ]]; then
+    return 1
+  fi
+
+  output_file="${output_file%.json}"
+  printf '%s/%s\n' "$(current_raw_output_dir)" "$output_file"
+}
+
+copy_raw_artifact() {
+  local source_file="$1"
+  local destination_file="$2"
+
+  mkdir -p "$(dirname "$destination_file")"
+  cp "$source_file" "$destination_file"
 }
 
 prompt_for_target_ip() {
@@ -204,8 +230,10 @@ initialize_run_context() {
   RUN_OUTPUT_DIR="$OUTPUT_DIR/${RUN_CLIENT_SLUG}-${RUN_LOCATION_SLUG}-${RUN_DATE_STAMP}"
   RUN_REPORT_FILE="$RUN_OUTPUT_DIR/lss-network-tools-report-${RUN_CLIENT_SLUG}-${RUN_LOCATION_SLUG}-${RUN_DATE_STAMP}-${RUN_REPORT_TIME_STAMP}.txt"
   RUN_DEBUG_LOG="$RUN_OUTPUT_DIR/debug.txt"
+  RUN_MANIFEST_FILE="$RUN_OUTPUT_DIR/manifest.json"
 
   mkdir -p "$RUN_OUTPUT_DIR"
+  mkdir -p "$(current_raw_output_dir)"
 
   echo
   echo "Run output directory: $RUN_OUTPUT_DIR"
@@ -333,6 +361,96 @@ build_report_for_current_run() {
   echo "Report built successfully: $report_file"
 }
 
+write_manifest_for_current_run() {
+  local manifest_file="$RUN_MANIFEST_FILE"
+  local timestamp
+  local selected_interface_value="${SELECTED_INTERFACE:-unknown}"
+  local task_entries="[]"
+  local raw_entries="[]"
+  local task_id title json_name json_path raw_prefix
+  local relative_path
+  local artifact_type
+
+  if [[ -z "$RUN_OUTPUT_DIR" ]]; then
+    return 1
+  fi
+
+  timestamp="$(date '+%d-%m-%Y %H:%M')"
+
+  for task_id in $(get_task_ids); do
+    title="$(task_title "$task_id")"
+    json_name="$(task_output_file "$task_id")"
+    [[ -z "$json_name" ]] && continue
+    json_path="$RUN_OUTPUT_DIR/$json_name"
+    raw_prefix="$(task_raw_prefix "$task_id" 2>/dev/null || true)"
+
+    task_entries="$(jq -cn \
+      --argjson existing "$task_entries" \
+      --arg task_id "$task_id" \
+      --arg title "$title" \
+      --arg json_file "$json_name" \
+      --argjson json_present "$(json_file_usable "$json_path" && echo true || echo false)" \
+      --arg raw_prefix "$(basename "$raw_prefix")" \
+      '$existing + [{
+        task_id: ($task_id | tonumber),
+        title: $title,
+        json_file: $json_file,
+        json_present: $json_present,
+        raw_prefix: $raw_prefix
+      }]' )"
+  done
+
+  while IFS= read -r artifact_path; do
+    [[ -z "$artifact_path" ]] && continue
+    relative_path="${artifact_path#$RUN_OUTPUT_DIR/}"
+
+    case "$relative_path" in
+      *.json)
+        artifact_type="json"
+        ;;
+      *.txt)
+        artifact_type="text"
+        ;;
+      *)
+        artifact_type="other"
+        ;;
+    esac
+
+    raw_entries="$(jq -cn \
+      --argjson existing "$raw_entries" \
+      --arg path "$relative_path" \
+      --arg type "$artifact_type" \
+      '$existing + [{
+        path: $path,
+        type: $type
+      }]' )"
+  done < <(find "$RUN_OUTPUT_DIR" -type f ! -name 'manifest.json' | sort)
+
+  jq -n \
+    --arg generated_at "$timestamp" \
+    --arg location "$RUN_LOCATION" \
+    --arg client "$RUN_CLIENT_NAME" \
+    --arg run_directory "$(basename "$RUN_OUTPUT_DIR")" \
+    --arg selected_interface "$selected_interface_value" \
+    --arg report_file "$(basename "$RUN_REPORT_FILE")" \
+    --arg debug_file "$(basename "$RUN_DEBUG_LOG")" \
+    --argjson tasks "$task_entries" \
+    --argjson artifacts "$raw_entries" \
+    '{
+      generated_at: $generated_at,
+      client: $client,
+      location: $location,
+      run_directory: $run_directory,
+      selected_interface: $selected_interface,
+      report_file: $report_file,
+      debug_file: $debug_file,
+      tasks: $tasks,
+      artifacts: $artifacts
+    }' > "$manifest_file"
+
+  validate_json_file "$manifest_file"
+}
+
 finalize_run() {
   if [[ -n "$RUN_OUTPUT_DIR" ]] && [[ -n "$(find "$RUN_OUTPUT_DIR" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null)" ]]; then
     build_report_for_current_run || true
@@ -340,6 +458,10 @@ finalize_run() {
 
   if [[ -n "$RUN_OUTPUT_DIR" && -n "$SESSION_DEBUG_LOG" && -f "$SESSION_DEBUG_LOG" ]]; then
     cp "$SESSION_DEBUG_LOG" "$RUN_DEBUG_LOG" 2>/dev/null || true
+  fi
+
+  if [[ -n "$RUN_OUTPUT_DIR" ]]; then
+    write_manifest_for_current_run || true
   fi
 }
 
@@ -981,6 +1103,7 @@ scan_servers_by_ports() {
   local network
   local scan_file
   local json_file
+  local raw_file
   local result_count=0
 
   if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
@@ -1001,6 +1124,7 @@ scan_servers_by_ports() {
   echo "Stage 2: Scanning $description ports ($port_list)..."
 
   scan_file="$(mktemp)"
+  raw_file="$(current_raw_output_dir)/${output_file%.json}-nmap.grep"
   nmap -n -p "$port_list" --open "$network" -oG - > "$scan_file" 2>/dev/null &
   local scan_pid=$!
   spinner
@@ -1008,6 +1132,8 @@ scan_servers_by_ports() {
     rm -f "$scan_file"
     return 1
   }
+
+  copy_raw_artifact "$scan_file" "$raw_file"
 
   json_file="$(current_output_dir)/$output_file"
   jq -n \
@@ -1276,6 +1402,7 @@ internet_speed_test() {
   local result
   local timeout_seconds=90
   local result_file
+  local raw_file
   local pid
   local exit_code
   local public_ip server_name server_location ping_latency download_speed upload_speed
@@ -1315,6 +1442,8 @@ internet_speed_test() {
   run_with_stage_spinner "$pid" "$timeout_seconds"
   exit_code=$?
   result="$(cat "$result_file")"
+  raw_file="$(task_raw_prefix 2)-raw.json"
+  printf '%s\n' "$result" > "$raw_file"
   rm -f "$result_file"
 
   if [[ "$exit_code" -ne 0 ]]; then
@@ -1386,6 +1515,7 @@ gateway_details() {
   local gateway_ip
   local ports=()
   local port
+  local raw_file
 
   if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
     echo
@@ -1407,8 +1537,22 @@ gateway_details() {
 
   local gateway_scan_file
   gateway_scan_file="$(mktemp)"
+  raw_file="$(task_raw_prefix 3)-nmap.grep"
 
-  nmap -p- --open -T4 "$gateway_ip" -oG - 2>/dev/null | awk '
+  nmap -p- --open -T4 "$gateway_ip" -oG - > "$gateway_scan_file" 2>/dev/null &
+  local gateway_scan_pid=$!
+  spinner
+  wait_for_pid "$gateway_scan_pid" "Gateway port scan failed for $gateway_ip." || {
+    rm -f "$gateway_scan_file"
+    return 1
+  }
+  echo
+
+  copy_raw_artifact "$gateway_scan_file" "$raw_file"
+
+  while IFS= read -r port; do
+    [[ -n "$port" ]] && ports+=("$port")
+  done < <(awk '
     /Ports:/ {
       split($0, parts, "Ports: ")
       if (length(parts) < 2) {
@@ -1424,18 +1568,7 @@ gateway_details() {
         }
       }
     }
-  ' > "$gateway_scan_file" &
-  local gateway_scan_pid=$!
-  spinner
-  wait_for_pid "$gateway_scan_pid" "Gateway port scan failed for $gateway_ip." || {
-    rm -f "$gateway_scan_file"
-    return 1
-  }
-  echo
-
-  while IFS= read -r port; do
-    [[ -n "$port" ]] && ports+=("$port")
-  done < "$gateway_scan_file"
+  ' "$gateway_scan_file")
   rm -f "$gateway_scan_file"
 
   echo "Open Ports:"
@@ -1460,6 +1593,7 @@ custom_target_port_scan() {
   local port
   local json_file
   local scan_file
+  local raw_file
 
   if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
     echo
@@ -1472,6 +1606,7 @@ custom_target_port_scan() {
   echo "Stage 1: Scanning all open ports on target (this may take up to 1 minute)..."
 
   scan_file="$(mktemp)"
+  raw_file="$(task_raw_prefix 10)-nmap.grep"
   nmap -p- --open -T4 "$target_ip" -oG - > "$scan_file" 2>/dev/null &
   local scan_pid=$!
   spinner
@@ -1480,6 +1615,8 @@ custom_target_port_scan() {
     return 1
   }
   echo
+
+  copy_raw_artifact "$scan_file" "$raw_file"
 
   while IFS= read -r port; do
     [[ -n "$port" ]] && ports+=("$port")
@@ -1640,6 +1777,7 @@ run_stress_test_for_target() {
   local returned_to_baseline=false
   local json_file
   local json_tmp
+  local raw_prefix
   local stage_warning=""
   local stage_failure=false
   local warning_json="null"
@@ -1670,6 +1808,8 @@ run_stress_test_for_target() {
   echo "$stage_subject_label: $target_ip"
   echo "Interface: $iface"
   echo
+
+  raw_prefix="$(task_raw_prefix "$task_id")"
 
   baseline_file="$(mktemp)"
   jitter_file="$(mktemp)"
@@ -1903,6 +2043,15 @@ run_stress_test_for_target() {
 
   mv "$json_tmp" "$json_file"
 
+  copy_raw_artifact "$baseline_file" "${raw_prefix}-baseline.txt"
+  copy_raw_artifact "$jitter_file" "${raw_prefix}-jitter.txt"
+  copy_raw_artifact "$large_file" "${raw_prefix}-large-packet.txt"
+  copy_raw_artifact "$sustained_file" "${raw_prefix}-sustained.txt"
+  copy_raw_artifact "$recovery_file" "${raw_prefix}-recovery.txt"
+  for idx in "${!ramp_sizes[@]}"; do
+    copy_raw_artifact "${ramping_files[$idx]}" "${raw_prefix}-ramping-${ramp_sizes[$idx]}.txt"
+  done
+
   rm -f "$baseline_file" "$jitter_file" "$large_file" "$sustained_file" "$recovery_file" "${ramping_files[@]}"
 
   echo
@@ -2052,6 +2201,7 @@ dhcp_network_scan() {
   local discovery_attempts=5
   local attempt
   local gateway_ip=""
+  local raw_prefix
   local raw_offers_observed=0
   local unique_offers_observed=0
   local rogue_detected=false
@@ -2069,6 +2219,7 @@ dhcp_network_scan() {
     echo "DHCP Network Scan"
   fi
   echo "Stage 1: Discovering DHCP servers on interface $SELECTED_INTERFACE..."
+  raw_prefix="$(task_raw_prefix 4)"
 
   dhcp_output_file="$(mktemp)"
   if [[ "$EUID" -eq 0 ]]; then
@@ -2139,6 +2290,11 @@ dhcp_network_scan() {
 
     attempt_excerpt="$(extract_dhcp_attempt_excerpt "$dhcp_output_file")"
     raw_attempt_excerpts+=("$attempt_excerpt")
+
+    copy_raw_artifact "$dhcp_output_file" "$(printf '%s-attempt-%02d.txt' "$raw_prefix" "$attempt")"
+    if [[ -s "$tcpdump_output_file" ]]; then
+      copy_raw_artifact "$tcpdump_output_file" "$(printf '%s-tcpdump-%02d.txt' "$raw_prefix" "$attempt")"
+    fi
 
     rm -f "$tcpdump_output_file"
   done
