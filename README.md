@@ -38,6 +38,8 @@ After selecting a network interface, the tool provides these scan functions:
    Prompts for an IP address and runs a full open-port scan against that target.
 11. **Custom Target Stress Test**  
    Prompts for an IP address and runs the same high-impact ICMP stress workflow against that specific target.
+12. **MAC Vendor Lookup**  
+   Prompts for an IP address and performs a fast MAC address and vendor lookup for that target.
 
 Additional menu options:
 
@@ -127,8 +129,9 @@ Possible files inside a run folder:
 - `smb-nfs-scan.json`
 - `print-server-scan.json`
 - `gateway-stress-test.json`
-- `custom-target-port-scan.json`
-- `custom-target-stress-test.json`
+- `custom-target-port-scan-device-<n>.json`
+- `custom-target-stress-test-device-<n>.json`
+- `custom-target-mac-vendor-device-<n>.json`
 - `manifest.json`
 - `debug.txt`
 - `lss-network-tools-report-<client>-<location>-DD-MM-YYYY-HH-MM.txt`

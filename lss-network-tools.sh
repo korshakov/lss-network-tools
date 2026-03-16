@@ -36,6 +36,7 @@ TASKS_DATA=$(cat <<'TASKS'
 9|Gateway Stress Test|gateway-stress-test.json
 10|Custom Target Port Scan|custom-target-port-scan.json
 11|Custom Target Stress Test|custom-target-stress-test.json
+12|MAC Vendor Lookup|custom-target-mac-vendor.json
 TASKS
 )
 
@@ -165,6 +166,88 @@ task_output_path() {
   printf '%s/%s\n' "$(current_output_dir)" "$output_file"
 }
 
+task_supports_multiple_entries() {
+  case "$1" in
+    10|11|12) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+task_output_glob() {
+  local task_id="$1"
+  local output_file
+
+  output_file="$(task_output_file "$task_id")"
+  if [[ -z "$output_file" ]]; then
+    return 1
+  fi
+
+  if task_supports_multiple_entries "$task_id"; then
+    printf '%s-device-*.json\n' "${output_file%.json}"
+  else
+    printf '%s\n' "$output_file"
+  fi
+}
+
+task_json_files() {
+  local task_id="$1"
+  local file_path
+  local file_glob
+
+  if task_supports_multiple_entries "$task_id"; then
+    file_glob="$(task_output_glob "$task_id")"
+    find "$(current_output_dir)" -maxdepth 1 -type f -name "$file_glob" | sort | while IFS= read -r file_path; do
+      if json_file_usable "$file_path"; then
+        echo "$file_path"
+      fi
+    done
+  else
+    file_path="$(task_output_path "$task_id")"
+    if json_file_usable "$file_path"; then
+      echo "$file_path"
+    fi
+  fi
+}
+
+next_multi_entry_output_path() {
+  local task_id="$1"
+  local entry_index
+
+  entry_index="$(next_multi_entry_index "$task_id")"
+  multi_entry_output_path_for_index "$task_id" "$entry_index"
+}
+
+next_multi_entry_index() {
+  local task_id="$1"
+  local output_file
+  local prefix
+  local count
+
+  output_file="$(task_output_file "$task_id")"
+  if [[ -z "$output_file" ]]; then
+    return 1
+  fi
+
+  prefix="${output_file%.json}"
+  count="$(find "$(current_output_dir)" -maxdepth 1 -type f -name "${prefix}-device-*.json" | wc -l | awk '{print $1}')"
+  printf '%d\n' "$((count + 1))"
+}
+
+multi_entry_output_path_for_index() {
+  local task_id="$1"
+  local entry_index="$2"
+  local output_file
+  local prefix
+
+  output_file="$(task_output_file "$task_id")"
+  if [[ -z "$output_file" ]]; then
+    return 1
+  fi
+
+  prefix="${output_file%.json}"
+  printf '%s/%s-device-%s.json\n' "$(current_output_dir)" "$prefix" "$entry_index"
+}
+
 task_raw_prefix() {
   local task_id="$1"
   local output_file
@@ -176,6 +259,29 @@ task_raw_prefix() {
 
   output_file="${output_file%.json}"
   printf '%s/%s\n' "$(current_raw_output_dir)" "$output_file"
+}
+
+next_multi_entry_raw_prefix() {
+  local task_id="$1"
+  local entry_index
+
+  entry_index="$(next_multi_entry_index "$task_id")"
+  multi_entry_raw_prefix_for_index "$task_id" "$entry_index"
+}
+
+multi_entry_raw_prefix_for_index() {
+  local task_id="$1"
+  local entry_index="$2"
+  local output_file
+  local prefix
+
+  output_file="$(task_output_file "$task_id")"
+  if [[ -z "$output_file" ]]; then
+    return 1
+  fi
+
+  prefix="${output_file%.json}"
+  printf '%s/%s-device-%s\n' "$(current_raw_output_dir)" "$prefix" "$entry_index"
 }
 
 copy_raw_artifact() {
@@ -246,6 +352,8 @@ build_report_for_current_run() {
   local ran_summary=""
   local missing_summary=""
   local func_id title file_name file_path
+  local task_files=()
+  local entry_index
   local report_interface
   local interface_info_file
   local detected_iface
@@ -295,11 +403,7 @@ build_report_for_current_run() {
 
   for func_id in $(get_task_ids); do
     title="$(task_title "$func_id")"
-    file_name="$(task_output_file "$func_id")"
-    [[ -z "$file_name" ]] && continue
-    file_path="$RUN_OUTPUT_DIR/$file_name"
-
-    if json_file_usable "$file_path"; then
+    if [[ -n "$(task_json_files "$func_id")" ]]; then
       ran_summary+="[x] ${func_id}) ${title}"$'\n'
     else
       missing_summary+="[ ] ${func_id}) ${title}"$'\n'
@@ -327,35 +431,44 @@ build_report_for_current_run() {
 
   for func_id in $(get_task_ids); do
     title="$(task_title "$func_id")"
-    file_name="$(task_output_file "$func_id")"
-    [[ -z "$file_name" ]] && continue
-    file_path="$RUN_OUTPUT_DIR/$file_name"
-
-    if ! json_file_usable "$file_path"; then
+    task_files=()
+    while IFS= read -r file_path; do
+      [[ -n "$file_path" ]] && task_files+=("$file_path")
+    done < <(task_json_files "$func_id")
+    if [[ "${#task_files[@]}" -eq 0 ]]; then
       continue
     fi
 
-    {
-      echo "================================================"
-      echo "Function $func_id) $title"
-      echo "================================================"
-    } >> "$report_file"
+    entry_index=0
+    for file_path in "${task_files[@]}"; do
+      entry_index=$((entry_index + 1))
+      {
+        echo "================================================"
+        if task_supports_multiple_entries "$func_id"; then
+          echo "Function $func_id) $title - Device $entry_index"
+        else
+          echo "Function $func_id) $title"
+        fi
+        echo "================================================"
+      } >> "$report_file"
 
-    case "$func_id" in
-      1) render_interface_info_report "$file_path" "$report_file" ;;
-      2) render_speed_test_report "$file_path" "$report_file" ;;
-      3) render_gateway_report "$file_path" "$report_file" ;;
-      4) render_dhcp_report "$file_path" "$report_file" ;;
-      5) render_generic_network_scan_report "$file_path" "$report_file" "DNS" ;;
-      6) render_generic_network_scan_report "$file_path" "$report_file" "LDAP/AD" ;;
-      7) render_generic_network_scan_report "$file_path" "$report_file" "SMB/NFS" ;;
-      8) render_generic_network_scan_report "$file_path" "$report_file" "Printer" ;;
-      9) render_gateway_stress_report "$file_path" "$report_file" ;;
-      10) render_custom_target_port_scan_report "$file_path" "$report_file" ;;
-      11) render_custom_target_stress_report "$file_path" "$report_file" ;;
-    esac
+      case "$func_id" in
+        1) render_interface_info_report "$file_path" "$report_file" ;;
+        2) render_speed_test_report "$file_path" "$report_file" ;;
+        3) render_gateway_report "$file_path" "$report_file" ;;
+        4) render_dhcp_report "$file_path" "$report_file" ;;
+        5) render_generic_network_scan_report "$file_path" "$report_file" "DNS" ;;
+        6) render_generic_network_scan_report "$file_path" "$report_file" "LDAP/AD" ;;
+        7) render_generic_network_scan_report "$file_path" "$report_file" "SMB/NFS" ;;
+        8) render_generic_network_scan_report "$file_path" "$report_file" "Printer" ;;
+        9) render_gateway_stress_report "$file_path" "$report_file" ;;
+        10) render_custom_target_port_scan_report "$file_path" "$report_file" ;;
+        11) render_custom_target_stress_report "$file_path" "$report_file" ;;
+        12) render_custom_target_mac_vendor_report "$file_path" "$report_file" ;;
+      esac
 
-    echo >> "$report_file"
+      echo >> "$report_file"
+    done
   done
 
   echo "Report built successfully: $report_file"
@@ -367,7 +480,8 @@ write_manifest_for_current_run() {
   local selected_interface_value="${SELECTED_INTERFACE:-unknown}"
   local task_entries="[]"
   local raw_entries="[]"
-  local task_id title json_name json_path raw_prefix
+  local task_id title json_name raw_prefix
+  local task_files_json="[]"
   local relative_path
   local artifact_type
 
@@ -381,21 +495,26 @@ write_manifest_for_current_run() {
     title="$(task_title "$task_id")"
     json_name="$(task_output_file "$task_id")"
     [[ -z "$json_name" ]] && continue
-    json_path="$RUN_OUTPUT_DIR/$json_name"
     raw_prefix="$(task_raw_prefix "$task_id" 2>/dev/null || true)"
+    task_files_json="$(task_json_files "$task_id" | while IFS= read -r path; do
+      [[ -n "$path" ]] && basename "$path"
+    done | jq -R . | jq -s .)"
+    [[ -z "$task_files_json" ]] && task_files_json="[]"
 
     task_entries="$(jq -cn \
       --argjson existing "$task_entries" \
       --arg task_id "$task_id" \
       --arg title "$title" \
       --arg json_file "$json_name" \
-      --argjson json_present "$(json_file_usable "$json_path" && echo true || echo false)" \
+      --argjson json_present "$(if [[ "$task_files_json" != "[]" ]]; then echo true; else echo false; fi)" \
+      --argjson json_files "$task_files_json" \
       --arg raw_prefix "$(basename "$raw_prefix")" \
       '$existing + [{
         task_id: ($task_id | tonumber),
         title: $title,
         json_file: $json_file,
         json_present: $json_present,
+        json_files: $json_files,
         raw_prefix: $raw_prefix
       }]' )"
   done
@@ -1594,6 +1713,7 @@ custom_target_port_scan() {
   local json_file
   local scan_file
   local raw_file
+  local entry_index
 
   if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
     echo
@@ -1606,7 +1726,8 @@ custom_target_port_scan() {
   echo "Stage 1: Scanning all open ports on target (this may take up to 1 minute)..."
 
   scan_file="$(mktemp)"
-  raw_file="$(task_raw_prefix 10)-nmap.grep"
+  entry_index="$(next_multi_entry_index 10)"
+  raw_file="$(multi_entry_raw_prefix_for_index 10 "$entry_index")-nmap.grep"
   nmap -p- --open -T4 "$target_ip" -oG - > "$scan_file" 2>/dev/null &
   local scan_pid=$!
   spinner
@@ -1646,7 +1767,7 @@ custom_target_port_scan() {
     printf '%s\n' "${ports[@]}"
   fi
 
-  json_file="$(task_output_path 10)"
+  json_file="$(multi_entry_output_path_for_index 10 "$entry_index")"
   jq -n \
     --arg target_ip "$target_ip" \
     --argjson open_ports "$(ports_to_json_array "${ports[@]}")" \
@@ -1658,6 +1779,123 @@ custom_target_port_scan() {
 
   validate_json_file "$json_file"
   echo "Saved JSON: $json_file"
+}
+
+custom_target_mac_vendor_lookup() {
+  local target_ip
+  local json_file
+  local raw_file
+  local raw_prefix
+  local scan_file
+  local scan_pid
+  local entry_index
+  local mac_address=""
+  local vendor_name=""
+  local lookup_method="nmap"
+  local arp_output=""
+
+  if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
+    echo
+    echo "MAC Vendor Lookup"
+  fi
+
+  target_ip="$(prompt_for_target_ip "Target IP Address: ")"
+  echo "Target IP: $target_ip"
+  echo
+  echo "Stage 1: Looking up MAC address and vendor..."
+
+  scan_file="$(mktemp)"
+  entry_index="$(next_multi_entry_index 12)"
+  raw_prefix="$(multi_entry_raw_prefix_for_index 12 "$entry_index")"
+  raw_file="${raw_prefix}-nmap.txt"
+  nmap -sn "$target_ip" > "$scan_file" 2>/dev/null &
+  scan_pid=$!
+  spinner
+  wait_for_pid "$scan_pid" "MAC vendor lookup failed for $target_ip." || {
+    rm -f "$scan_file"
+    return 1
+  }
+  echo
+
+  copy_raw_artifact "$scan_file" "$raw_file"
+
+  mac_address="$(awk '
+    /MAC Address:/ {
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/) {
+          print toupper($i)
+          exit
+        }
+      }
+    }
+  ' "$scan_file")"
+
+  vendor_name="$(awk '
+    /MAC Address:/ {
+      line = $0
+      sub(/^.*MAC Address: [0-9A-Fa-f:]+[[:space:]]*/, "", line)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      if (line ~ /^\(.*\)$/) {
+        sub(/^\(/, "", line)
+        sub(/\)$/, "", line)
+      }
+      print line
+      exit
+    }
+  ' "$scan_file")"
+
+  if [[ -z "$mac_address" ]]; then
+    ping -c 1 "$target_ip" >/dev/null 2>&1 || true
+    if [[ "$OS" == "macos" ]]; then
+      arp_output="$(arp -n "$target_ip" 2>/dev/null || true)"
+    else
+      arp_output="$(ip neigh show "$target_ip" 2>/dev/null || true)"
+      if [[ -z "$arp_output" && "$(command -v arp || true)" != "" ]]; then
+        arp_output="$(arp -n "$target_ip" 2>/dev/null || true)"
+      fi
+    fi
+
+    if [[ -n "$arp_output" ]]; then
+      mac_address="$(printf '%s\n' "$arp_output" | awk '
+        {
+          for (i = 1; i <= NF; i++) {
+            if ($i ~ /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/) {
+              print toupper($i)
+              exit
+            }
+          }
+        }
+      ')"
+      if [[ -n "$mac_address" ]]; then
+        lookup_method="arp-cache"
+        printf '%s\n' "$arp_output" > "${raw_prefix}-arp.txt"
+      fi
+    fi
+  fi
+
+  [[ -z "$vendor_name" ]] && vendor_name="unknown"
+
+  echo "MAC Address: ${mac_address:-unknown}"
+  echo "Vendor: ${vendor_name}"
+  echo "Lookup Method: ${lookup_method}"
+
+  json_file="$(multi_entry_output_path_for_index 12 "$entry_index")"
+  jq -n \
+    --arg target_ip "$target_ip" \
+    --arg mac_address "$mac_address" \
+    --arg vendor "$vendor_name" \
+    --arg lookup_method "$lookup_method" \
+    '{
+      target_ip: $target_ip,
+      mac_address: (if $mac_address == "" then null else $mac_address end),
+      vendor: $vendor,
+      lookup_method: $lookup_method
+    }' > "$json_file"
+
+  validate_json_file "$json_file"
+  echo "Saved JSON: $json_file"
+
+  rm -f "$scan_file"
 }
 
 extract_ping_summary_line() {
@@ -1778,6 +2016,7 @@ run_stress_test_for_target() {
   local json_file
   local json_tmp
   local raw_prefix
+  local entry_index=""
   local stage_warning=""
   local stage_failure=false
   local warning_json="null"
@@ -1809,7 +2048,12 @@ run_stress_test_for_target() {
   echo "Interface: $iface"
   echo
 
-  raw_prefix="$(task_raw_prefix "$task_id")"
+  if task_supports_multiple_entries "$task_id"; then
+    entry_index="$(next_multi_entry_index "$task_id")"
+    raw_prefix="$(multi_entry_raw_prefix_for_index "$task_id" "$entry_index")"
+  else
+    raw_prefix="$(task_raw_prefix "$task_id")"
+  fi
 
   baseline_file="$(mktemp)"
   jitter_file="$(mktemp)"
@@ -1945,7 +2189,11 @@ run_stress_test_for_target() {
     warning_json="$(printf '%s' "$stage_warning" | jq -R .)"
   fi
 
-  json_file="$(task_output_path "$task_id")"
+  if task_supports_multiple_entries "$task_id"; then
+    json_file="$(multi_entry_output_path_for_index "$task_id" "$entry_index")"
+  else
+    json_file="$(task_output_path "$task_id")"
+  fi
   json_tmp="$(mktemp)"
   if ! jq -n \
     --arg function "$json_function_name" \
@@ -2599,6 +2847,24 @@ render_custom_target_stress_report() {
   } >> "$report_file"
 }
 
+render_custom_target_mac_vendor_report() {
+  local file="$1"
+  local report_file="$2"
+  local target_ip mac_address vendor lookup_method
+
+  target_ip="$(jq -r '.target_ip // "unknown"' "$file" 2>/dev/null)"
+  mac_address="$(jq -r '.mac_address // "unknown"' "$file" 2>/dev/null)"
+  vendor="$(jq -r '.vendor // "unknown"' "$file" 2>/dev/null)"
+  lookup_method="$(jq -r '.lookup_method // "unknown"' "$file" 2>/dev/null)"
+
+  {
+    echo "Target IP: ${target_ip}"
+    echo "MAC Address: ${mac_address}"
+    echo "Vendor: ${vendor}"
+    echo "Lookup Method: ${lookup_method}"
+  } >> "$report_file"
+}
+
 render_dhcp_report() {
   local file="$1"
   local report_file="$2"
@@ -2696,6 +2962,7 @@ run_task_by_id() {
     9) gateway_stress_test ;;
     10) custom_target_port_scan ;;
     11) custom_target_stress_test ;;
+    12) custom_target_mac_vendor_lookup ;;
     *) return 1 ;;
   esac
 }
