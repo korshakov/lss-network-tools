@@ -38,8 +38,8 @@ After selecting a network interface, the tool provides these scan functions:
    Prompts for an IP address and runs a full open-port scan against that target.
 11. **Custom Target Stress Test**  
    Prompts for an IP address and runs the same high-impact ICMP stress workflow against that specific target.
-12. **MAC Vendor Lookup**  
-   Prompts for an IP address and performs a fast MAC address and vendor lookup for that target.
+13. **Custom Target Identity Scan**  
+   Prompts for an IP address and combines MAC/vendor discovery, optional online vendor enrichment, hostname lookup, and conservative service fingerprinting into a single device identity profile with confidence and summary hints.
 
 Additional menu options:
 
@@ -62,6 +62,7 @@ High-impact warning:
 - **JSON output for every scan** for automation and post-processing.
 - **Per-run `manifest.json`** summarizing run metadata and all generated artifacts.
 - **Raw evidence capture** under `raw/` for scan source output such as `nmap`, `speedtest-cli`, DHCP discovery, and stress-test ping stages.
+- **Hostname enrichment** for custom target scans when reverse DNS is available.
 - **DHCP evidence capture** with unique responders, raw offer counts, and optional relay/proxy source visibility when `tcpdump` is available.
 - **Per-run debug log** captured as `debug.txt` in the run folder for troubleshooting.
 - **Optional `--debug` mode** that disables spinner redraws and keeps debug output easier to read.
@@ -131,7 +132,7 @@ Possible files inside a run folder:
 - `gateway-stress-test.json`
 - `custom-target-port-scan-device-<n>.json`
 - `custom-target-stress-test-device-<n>.json`
-- `custom-target-mac-vendor-device-<n>.json`
+- `custom-target-identity-scan-device-<n>.json`
 - `manifest.json`
 - `debug.txt`
 - `lss-network-tools-report-<client>-<location>-DD-MM-YYYY-HH-MM.txt`

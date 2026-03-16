@@ -36,7 +36,7 @@ TASKS_DATA=$(cat <<'TASKS'
 9|Gateway Stress Test|gateway-stress-test.json
 10|Custom Target Port Scan|custom-target-port-scan.json
 11|Custom Target Stress Test|custom-target-stress-test.json
-12|MAC Vendor Lookup|custom-target-mac-vendor.json
+13|Custom Target Identity Scan|custom-target-identity-scan.json
 TASKS
 )
 
@@ -168,7 +168,7 @@ task_output_path() {
 
 task_supports_multiple_entries() {
   case "$1" in
-    10|11|12) return 0 ;;
+    10|11|13) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -315,6 +315,45 @@ prompt_for_target_ip() {
 
     echo "Invalid IPv4 address. Try again."
   done
+}
+
+resolve_target_hostname() {
+  local target_ip="$1"
+  local hostname=""
+
+  if command -v dig >/dev/null 2>&1; then
+    hostname="$(dig +short -x "$target_ip" 2>/dev/null | sed -n '1p' | sed 's/\.$//')"
+  fi
+
+  if [[ -z "$hostname" ]] && command -v host >/dev/null 2>&1; then
+    hostname="$(host "$target_ip" 2>/dev/null | awk '/domain name pointer/ {print $NF; exit}' | sed 's/\.$//')"
+  fi
+
+  if [[ -z "$hostname" ]] && command -v nslookup >/dev/null 2>&1; then
+    hostname="$(nslookup "$target_ip" 2>/dev/null | awk -F'= ' '/name =/ {print $2; exit}' | sed 's/\.$//')"
+  fi
+
+  if [[ -z "$hostname" ]]; then
+    echo "unknown"
+  else
+    echo "$hostname"
+  fi
+}
+
+lookup_mac_vendor_online() {
+  local mac_address="$1"
+  local vendor_name=""
+
+  [[ -z "$mac_address" ]] && return 0
+
+  if ! command -v curl >/dev/null 2>&1; then
+    return 0
+  fi
+
+  vendor_name="$(curl -fsS --max-time 3 "https://api.macvendors.com/$mac_address" 2>/dev/null || true)"
+  if [[ -n "$vendor_name" ]]; then
+    printf '%s\n' "$vendor_name"
+  fi
 }
 
 initialize_run_context() {
@@ -464,7 +503,7 @@ build_report_for_current_run() {
         9) render_gateway_stress_report "$file_path" "$report_file" ;;
         10) render_custom_target_port_scan_report "$file_path" "$report_file" ;;
         11) render_custom_target_stress_report "$file_path" "$report_file" ;;
-        12) render_custom_target_mac_vendor_report "$file_path" "$report_file" ;;
+        13) render_custom_target_identity_report "$file_path" "$report_file" ;;
       esac
 
       echo >> "$report_file"
@@ -1708,6 +1747,7 @@ gateway_details() {
 
 custom_target_port_scan() {
   local target_ip
+  local hostname
   local ports=()
   local port
   local json_file
@@ -1721,7 +1761,9 @@ custom_target_port_scan() {
   fi
 
   target_ip="$(prompt_for_target_ip "Target IP Address: ")"
+  hostname="$(resolve_target_hostname "$target_ip")"
   echo "Target IP: $target_ip"
+  echo "Hostname: $hostname"
   echo
   echo "Stage 1: Scanning all open ports on target (this may take up to 1 minute)..."
 
@@ -1770,9 +1812,11 @@ custom_target_port_scan() {
   json_file="$(multi_entry_output_path_for_index 10 "$entry_index")"
   jq -n \
     --arg target_ip "$target_ip" \
+    --arg hostname "$hostname" \
     --argjson open_ports "$(ports_to_json_array "${ports[@]}")" \
     '{
       target_ip: $target_ip,
+      hostname: $hostname,
       scan_type: "custom_target_port_scan",
       open_ports: $open_ports
     }' > "$json_file"
@@ -1781,43 +1825,162 @@ custom_target_port_scan() {
   echo "Saved JSON: $json_file"
 }
 
-custom_target_mac_vendor_lookup() {
+guess_device_type_from_identity() {
+  local combined="$1"
+  local vendor="$2"
+  local hostname="$3"
+  local lowered
+
+  lowered="$(printf '%s %s %s' "$combined" "$vendor" "$hostname" | tr '[:upper:]' '[:lower:]')"
+
+  case "$lowered" in
+    *opnsense*|*pfsense*|*unbound*|*tomcat*|*firewall*|*routeros*|*mikrotik*|*fortinet*|*sonicwall*)
+      echo "firewall-or-router"
+      ;;
+    *netgear*|*gs110tp*|*gs*switch*|*switch*)
+      echo "network-switch"
+      ;;
+    *asus*|*asuswrt*|*mesh*|*access\ point*|*wireless\ router*|*wifi*)
+      echo "access-point-or-router"
+      ;;
+    *printer*|*ipp*|*jetdirect*|*cups*)
+      echo "printer"
+      ;;
+    *samba*|*microsoft-ds*|*netbios*|*synology*|*qnap*|*nfs*)
+      echo "nas-or-file-server"
+      ;;
+    *microsoft*|*windows*|*winrm*|*rdp*)
+      echo "windows-host"
+      ;;
+    *openssh*|*ubuntu*|*debian*|*apache*|*nginx*|*linux*)
+      echo "linux-host"
+      ;;
+    *camera*|*rtsp*|*onvif*|*hikvision*|*dahua*)
+      echo "camera-or-nvr"
+      ;;
+    *cisco*|*aruba*|*ubiquiti*|*unifi*|*wireless*)
+      echo "network-device"
+      ;;
+    *)
+      echo "unknown"
+      ;;
+  esac
+}
+
+guess_identity_confidence() {
+  local combined="$1"
+  local vendor="$2"
+  local hostname="$3"
+  local device_type="$4"
+  local lowered
+
+  lowered="$(printf '%s %s %s' "$combined" "$vendor" "$hostname" | tr '[:upper:]' '[:lower:]')"
+
+  case "$lowered" in
+    *opnsense*|*pfsense*|*netgear*|*gs110tp*|*asus*|*unifi*|*aruba*|*fortinet*|*sonicwall*)
+      echo "high"
+      return
+      ;;
+  esac
+
+  case "$device_type" in
+    firewall-or-router|network-switch|access-point-or-router|printer|nas-or-file-server|camera-or-nvr)
+      echo "medium"
+      ;;
+    *)
+      echo "low"
+      ;;
+  esac
+}
+
+build_identity_summary() {
+  local vendor="$1"
+  local device_type="$2"
+  local combined="$3"
+  local lowered
+
+  lowered="$(printf '%s %s' "$vendor" "$combined" | tr '[:upper:]' '[:lower:]')"
+
+  case "$lowered" in
+    *opnsense*)
+      echo "Likely OPNsense firewall"
+      return
+      ;;
+    *pfsense*)
+      echo "Likely pfSense firewall"
+      return
+      ;;
+    *netgear*|*gs110tp*)
+      echo "Likely Netgear switch"
+      return
+      ;;
+    *asus*|*mesh*)
+      echo "Likely Asus mesh AP or router"
+      return
+      ;;
+  esac
+
+  case "$device_type" in
+    firewall-or-router) echo "Likely firewall or router appliance" ;;
+    network-switch) echo "Likely managed switch" ;;
+    access-point-or-router) echo "Likely access point or router" ;;
+    printer) echo "Likely network printer" ;;
+    nas-or-file-server) echo "Likely NAS or file server" ;;
+    windows-host) echo "Likely Windows host" ;;
+    linux-host) echo "Likely Linux-based host" ;;
+    camera-or-nvr) echo "Likely IP camera or NVR" ;;
+    network-device) echo "Likely network infrastructure device" ;;
+    *) echo "Unknown device identity" ;;
+  esac
+}
+
+custom_target_identity_scan() {
   local target_ip
+  local hostname
   local json_file
-  local raw_file
   local raw_prefix
-  local scan_file
-  local scan_pid
+  local discovery_file
+  local services_file
   local entry_index
   local mac_address=""
   local vendor_name=""
+  local vendor_source="unknown"
   local lookup_method="nmap"
   local arp_output=""
+  local online_vendor=""
+  local host_state="unknown"
+  local device_type_hint="unknown"
+  local confidence="low"
+  local identity_summary="Unknown device identity"
+  local services_json="[]"
+  local combined_service_text=""
+  local combined_identity_text=""
 
   if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
     echo
-    echo "MAC Vendor Lookup"
+    echo "Custom Target Identity Scan"
   fi
 
   target_ip="$(prompt_for_target_ip "Target IP Address: ")"
+  hostname="$(resolve_target_hostname "$target_ip")"
   echo "Target IP: $target_ip"
+  echo "Hostname: $hostname"
   echo
-  echo "Stage 1: Looking up MAC address and vendor..."
+  echo "Stage 1: Discovering MAC address and vendor..."
 
-  scan_file="$(mktemp)"
-  entry_index="$(next_multi_entry_index 12)"
-  raw_prefix="$(multi_entry_raw_prefix_for_index 12 "$entry_index")"
-  raw_file="${raw_prefix}-nmap.txt"
-  nmap -sn "$target_ip" > "$scan_file" 2>/dev/null &
-  scan_pid=$!
+  entry_index="$(next_multi_entry_index 13)"
+  raw_prefix="$(multi_entry_raw_prefix_for_index 13 "$entry_index")"
+  discovery_file="$(mktemp)"
+  nmap -sn "$target_ip" > "$discovery_file" 2>/dev/null &
+  local discovery_pid=$!
   spinner
-  wait_for_pid "$scan_pid" "MAC vendor lookup failed for $target_ip." || {
-    rm -f "$scan_file"
+  wait_for_pid "$discovery_pid" "Custom target identity discovery failed for $target_ip." || {
+    rm -f "$discovery_file"
     return 1
   }
   echo
 
-  copy_raw_artifact "$scan_file" "$raw_file"
+  copy_raw_artifact "$discovery_file" "${raw_prefix}-discovery.txt"
 
   mac_address="$(awk '
     /MAC Address:/ {
@@ -1828,7 +1991,7 @@ custom_target_mac_vendor_lookup() {
         }
       }
     }
-  ' "$scan_file")"
+  ' "$discovery_file")"
 
   vendor_name="$(awk '
     /MAC Address:/ {
@@ -1842,7 +2005,11 @@ custom_target_mac_vendor_lookup() {
       print line
       exit
     }
-  ' "$scan_file")"
+  ' "$discovery_file")"
+
+  if [[ -n "$vendor_name" && "$vendor_name" != "Unknown" && "$vendor_name" != "unknown" ]]; then
+    vendor_source="nmap"
+  fi
 
   if [[ -z "$mac_address" ]]; then
     ping -c 1 "$target_ip" >/dev/null 2>&1 || true
@@ -1873,29 +2040,121 @@ custom_target_mac_vendor_lookup() {
     fi
   fi
 
+  if [[ -n "$mac_address" && ( -z "$vendor_name" || "$vendor_name" == "Unknown" || "$vendor_name" == "unknown" ) ]]; then
+    online_vendor="$(lookup_mac_vendor_online "$mac_address")"
+    if [[ -n "$online_vendor" ]]; then
+      vendor_name="$online_vendor"
+      vendor_source="macvendors-api"
+    fi
+  fi
+
   [[ -z "$vendor_name" ]] && vendor_name="unknown"
+  [[ "$vendor_source" == "unknown" && "$vendor_name" != "unknown" ]] && vendor_source="nmap"
 
   echo "MAC Address: ${mac_address:-unknown}"
   echo "Vendor: ${vendor_name}"
+  echo "Vendor Source: ${vendor_source}"
   echo "Lookup Method: ${lookup_method}"
+  echo
+  echo "Stage 2: Running conservative service fingerprint scan..."
 
-  json_file="$(multi_entry_output_path_for_index 12 "$entry_index")"
+  services_file="$(mktemp)"
+  nmap -Pn -sV --version-light "$target_ip" > "$services_file" 2>/dev/null &
+  local scan_pid=$!
+  spinner
+  wait_for_pid "$scan_pid" "Custom target identity fingerprint failed for $target_ip." || {
+    rm -f "$discovery_file" "$services_file"
+    return 1
+  }
+  echo
+
+  copy_raw_artifact "$services_file" "${raw_prefix}-services.txt"
+
+  host_state="$(awk '
+    /^Host is up/ { print "up"; found=1; exit }
+    /Note: Host seems down/ { print "down"; found=1; exit }
+    END {
+      if (!found) {
+        print "unknown"
+      }
+    }
+  ' "$services_file")"
+
+  services_json="$(awk '
+    BEGIN { in_ports=0 }
+    /^PORT[[:space:]]+STATE[[:space:]]+SERVICE/ { in_ports=1; next }
+    in_ports && /^Service detection performed/ { in_ports=0; next }
+    in_ports && /^[0-9]+\/[a-z]+[[:space:]]+/ {
+      port_proto = $1
+      state = $2
+      service = $3
+      version = ""
+      if (NF > 3) {
+        for (i = 4; i <= NF; i++) {
+          if (version != "") {
+            version = version " "
+          }
+          version = version $i
+        }
+      }
+      printf "%s\t%s\t%s\t%s\n", port_proto, state, service, version
+    }
+  ' "$services_file" | jq -R -s '
+    split("\n")
+    | map(select(length > 0))
+    | map(split("\t"))
+    | map({
+        port: .[0],
+        state: .[1],
+        service: .[2],
+        version: (.[3] // "")
+      })
+  ')"
+
+  combined_service_text="$(jq -r '.[] | [.service, .version] | join(" ")' <<< "$services_json" 2>/dev/null | tr '\n' ' ')"
+  combined_identity_text="$(printf '%s %s %s' "$combined_service_text" "$vendor_name" "$hostname")"
+  device_type_hint="$(guess_device_type_from_identity "$combined_service_text" "$vendor_name" "$hostname")"
+  confidence="$(guess_identity_confidence "$combined_service_text" "$vendor_name" "$hostname" "$device_type_hint")"
+  identity_summary="$(build_identity_summary "$vendor_name" "$device_type_hint" "$combined_identity_text")"
+
+  echo "Host State: $host_state"
+  echo "Device Type Hint: $device_type_hint"
+  echo "Confidence: $confidence"
+  echo "Identity Summary: $identity_summary"
+  echo "Discovered Services:"
+  jq -r 'if length == 0 then "none found" else .[] | "- \(.port) | \(.state) | \(.service) | \((.version // "") | if . == "" then "no version banner" else . end)" end' <<< "$services_json"
+
+  json_file="$(multi_entry_output_path_for_index 13 "$entry_index")"
   jq -n \
     --arg target_ip "$target_ip" \
+    --arg hostname "$hostname" \
     --arg mac_address "$mac_address" \
     --arg vendor "$vendor_name" \
+    --arg vendor_source "$vendor_source" \
     --arg lookup_method "$lookup_method" \
+    --arg host_state "$host_state" \
+    --arg device_type_hint "$device_type_hint" \
+    --arg confidence "$confidence" \
+    --arg identity_summary "$identity_summary" \
+    --argjson services "$services_json" \
     '{
       target_ip: $target_ip,
+      hostname: $hostname,
       mac_address: (if $mac_address == "" then null else $mac_address end),
       vendor: $vendor,
-      lookup_method: $lookup_method
+      vendor_source: $vendor_source,
+      lookup_method: $lookup_method,
+      host_state: $host_state,
+      device_type_hint: $device_type_hint,
+      confidence: $confidence,
+      identity_summary: $identity_summary,
+      services: $services
     }' > "$json_file"
 
   validate_json_file "$json_file"
   echo "Saved JSON: $json_file"
 
-  rm -f "$scan_file"
+  rm -f "$discovery_file" "$services_file"
 }
 
 extract_ping_summary_line() {
@@ -2017,6 +2276,7 @@ run_stress_test_for_target() {
   local json_tmp
   local raw_prefix
   local entry_index=""
+  local hostname
   local stage_warning=""
   local stage_failure=false
   local warning_json="null"
@@ -2044,7 +2304,9 @@ run_stress_test_for_target() {
   fi
 
   echo "Done."
+  hostname="$(resolve_target_hostname "$target_ip")"
   echo "$stage_subject_label: $target_ip"
+  echo "Hostname: $hostname"
   echo "Interface: $iface"
   echo
 
@@ -2199,6 +2461,7 @@ run_stress_test_for_target() {
     --arg function "$json_function_name" \
     --arg target_key "$report_target_key" \
     --arg target_ip "$target_ip" \
+    --arg hostname "$hostname" \
     --arg interface "$iface" \
     --argjson completed_with_warnings "$stage_failure" \
     --argjson warning "$warning_json" \
@@ -2233,6 +2496,7 @@ run_stress_test_for_target() {
       {
         function: $function,
         ($target_key): $target_ip,
+        hostname: $hostname,
         interface: $interface,
         completed_with_warnings: $completed_with_warnings,
         warning: $warning,
@@ -2799,12 +3063,14 @@ render_gateway_stress_report() {
 render_custom_target_port_scan_report() {
   local file="$1"
   local report_file="$2"
-  local target_ip
+  local target_ip hostname
 
   target_ip="$(jq -r '.target_ip // "unknown"' "$file" 2>/dev/null)"
+  hostname="$(jq -r '.hostname // "unknown"' "$file" 2>/dev/null)"
 
   {
     echo "Target IP: ${target_ip}"
+    echo "Hostname: ${hostname}"
   } >> "$report_file"
 
   jq -r '"Open Ports: " + ((.open_ports // []) | if length > 0 then map(tostring) | join(", ") else "none found" end)' "$file" >> "$report_file"
@@ -2813,10 +3079,11 @@ render_custom_target_port_scan_report() {
 render_custom_target_stress_report() {
   local file="$1"
   local report_file="$2"
-  local target_ip iface baseline_avg sustained_avg high_jitter latency_under_load packet_loss slow_recovery
+  local target_ip hostname iface baseline_avg sustained_avg high_jitter latency_under_load packet_loss slow_recovery
   local completed_with_warnings warning stage_status
 
   target_ip="$(jq -r '.target_ip // "unknown"' "$file" 2>/dev/null)"
+  hostname="$(jq -r '.hostname // "unknown"' "$file" 2>/dev/null)"
   iface="$(jq -r '.interface // "unknown"' "$file" 2>/dev/null)"
   completed_with_warnings="$(jq -r '.completed_with_warnings // false' "$file" 2>/dev/null)"
   warning="$(jq -r '.warning // empty' "$file" 2>/dev/null)"
@@ -2830,6 +3097,7 @@ render_custom_target_stress_report() {
 
   {
     echo "Target IP: ${target_ip}"
+    echo "Hostname: ${hostname}"
     echo "Interface: ${iface}"
     echo "Completed With Warnings: ${completed_with_warnings}"
     if [[ -n "$warning" ]]; then
@@ -2847,22 +3115,38 @@ render_custom_target_stress_report() {
   } >> "$report_file"
 }
 
-render_custom_target_mac_vendor_report() {
+render_custom_target_identity_report() {
   local file="$1"
   local report_file="$2"
-  local target_ip mac_address vendor lookup_method
+  local target_ip hostname mac_address vendor vendor_source lookup_method
+  local host_state device_type_hint confidence identity_summary
 
   target_ip="$(jq -r '.target_ip // "unknown"' "$file" 2>/dev/null)"
+  hostname="$(jq -r '.hostname // "unknown"' "$file" 2>/dev/null)"
   mac_address="$(jq -r '.mac_address // "unknown"' "$file" 2>/dev/null)"
   vendor="$(jq -r '.vendor // "unknown"' "$file" 2>/dev/null)"
+  vendor_source="$(jq -r '.vendor_source // "unknown"' "$file" 2>/dev/null)"
   lookup_method="$(jq -r '.lookup_method // "unknown"' "$file" 2>/dev/null)"
+  host_state="$(jq -r '.host_state // "unknown"' "$file" 2>/dev/null)"
+  device_type_hint="$(jq -r '.device_type_hint // "unknown"' "$file" 2>/dev/null)"
+  confidence="$(jq -r '.confidence // "low"' "$file" 2>/dev/null)"
+  identity_summary="$(jq -r '.identity_summary // "Unknown device identity"' "$file" 2>/dev/null)"
 
   {
     echo "Target IP: ${target_ip}"
+    echo "Hostname: ${hostname}"
     echo "MAC Address: ${mac_address}"
     echo "Vendor: ${vendor}"
+    echo "Vendor Source: ${vendor_source}"
     echo "Lookup Method: ${lookup_method}"
+    echo "Host State: ${host_state}"
+    echo "Device Type Hint: ${device_type_hint}"
+    echo "Confidence: ${confidence}"
+    echo "Identity Summary: ${identity_summary}"
   } >> "$report_file"
+
+  jq -r 'if (.services // []) | length == 0 then "Discovered Services: none found" else "Discovered Services:" end' "$file" >> "$report_file"
+  jq -r '.services[]? | "- \(.port) | \(.state) | \(.service) | \((.version // "") | if . == "" then "no version banner" else . end)"' "$file" >> "$report_file"
 }
 
 render_dhcp_report() {
@@ -2962,7 +3246,7 @@ run_task_by_id() {
     9) gateway_stress_test ;;
     10) custom_target_port_scan ;;
     11) custom_target_stress_test ;;
-    12) custom_target_mac_vendor_lookup ;;
+    13) custom_target_identity_scan ;;
     *) return 1 ;;
   esac
 }
