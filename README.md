@@ -1,6 +1,6 @@
 # lss-network-tools
 
-Interactive network diagnostics for **macOS** and **Linux**, with JSON exports per scan and a consolidated human-readable report.
+Interactive network diagnostics for **macOS** and **Linux**, with per-run JSON exports and a consolidated human-readable report stored in the same run folder.
 
 ## Quick start
 
@@ -32,22 +32,24 @@ After selecting a network interface, the tool provides these scan functions:
    Scans for file-sharing services (SMB/NFS/rpcbind/netbios).
 8. **Printer/Print Server Network Scan**  
    Scans for common print service ports (LPD, IPP, JetDirect).
+9. **Gateway Stress Test**  
+   Runs repeated gateway latency and packet-loss checks to spot jitter and recovery issues under load.
 
 Additional menu options:
 
-- `000)` **Complete Network Audit** (runs functions 1–8 sequentially)
-- `00)` **Build Report** (creates a readable TXT report from existing JSON results)
+- `000)` **Complete Network Audit** (runs functions 1–9 sequentially)
 - `0)` Exit
 
 ## Key workflow features
 
 - **Dependency checklist at startup** with optional auto-install via `install.sh` when required tools are missing.
 - **Interactive interface selector** (on macOS, includes hardware port descriptions when available).
-- **Existing output protection** prompt: continue and clear prior data, or exit to back it up.
+- **Run context prompt** for location and client name after interface selection.
+- **Timestamped run folder per session** under `output/`, so prior runs stay intact.
 - **Progress indicators/spinners** for long-running scan stages.
 - **Speedtest timeout protection** (fails gracefully if it takes too long).
 - **JSON output for every scan** for automation and post-processing.
-- **Client/location-aware report filenames** for easier organization.
+- **Automatic report build on exit** into the same run folder as the JSON results.
 
 ## Supported platforms
 
@@ -65,7 +67,7 @@ Run from repo root:
 `install.sh` will:
 
 - Detect OS (macOS/Linux)
-- Install Homebrew if missing
+- Install Homebrew if missing on supported non-root setups
 - Install required dependencies (for example: `nmap`, `jq`, `speedtest-cli`, and platform-specific networking tools)
 - Create `output/` if needed
 - Ensure `lss-network-tools.sh` is executable
@@ -76,40 +78,34 @@ Run from repo root:
 ./lss-network-tools.sh
 ```
 
-> Some scans (notably DHCP discovery) may require root privileges for best results.
+> Some scans (notably DHCP discovery) may require root privileges. On Linux root servers, the installer prefers native packages and does not require `sudo`.
 
 ## Output
 
 ### JSON scan output
 
-All scan JSON files are written to:
+Each run creates a folder inside:
 
 ```text
 output/
 ```
 
-Possible files:
+Run folder format:
 
-- `output/interface-info.json`
-- `output/internet-speed-test.json`
-- `output/gateway-scan.json`
-- `output/dhcp-scan.json`
-- `output/dns-scan.json`
-- `output/ldap-ad-scan.json`
-- `output/smb-nfs-scan.json`
-- `output/print-server-scan.json`
+- `output/<client>-<location>-DD-MM-YYYY/`
 
-### Human-readable report output
+Possible files inside a run folder:
 
-Built reports are written to:
-
-```text
-reports/
-```
-
-Report filename format:
-
-- `reports/lss-network-tools-report-<client>-<location>-YYYYMMDD-HHMMSS.txt`
+- `interface-network-info.json`
+- `internet-speed-test.json`
+- `gateway-scan.json`
+- `dhcp-scan.json`
+- `dns-scan.json`
+- `ldap-ad-scan.json`
+- `smb-nfs-scan.json`
+- `print-server-scan.json`
+- `gateway-stress-test.json`
+- `lss-network-tools-report-<client>-<location>-DD-MM-YYYY-HH-MM.txt`
 
 The report includes:
 
