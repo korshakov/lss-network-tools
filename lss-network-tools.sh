@@ -15,6 +15,7 @@ RUN_REPORT_FILE=""
 HIGH_IMPACT_STRESS_CONFIRMED=0
 SESSION_DEBUG_LOG=""
 RUN_DEBUG_LOG=""
+OUTPUT_IS_TTY=0
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -111,6 +112,10 @@ current_output_dir() {
 initialize_debug_logging() {
   if [[ -n "$SESSION_DEBUG_LOG" ]]; then
     return
+  fi
+
+  if [[ -t 1 ]]; then
+    OUTPUT_IS_TTY=1
   fi
 
   SESSION_DEBUG_LOG="$OUTPUT_DIR/.debug-session-$$.txt"
@@ -287,7 +292,7 @@ warn_if_not_root() {
 }
 
 clear_screen_if_supported() {
-  if [[ -t 1 ]]; then
+  if [[ "$OUTPUT_IS_TTY" -eq 1 ]]; then
     if command -v clear >/dev/null 2>&1 && [[ -n "${TERM:-}" && "${TERM:-}" != "dumb" ]]; then
       clear
     else
@@ -497,7 +502,7 @@ select_interface() {
         status_suffix=" (loopback)"
       fi
 
-      if [[ "$has_ipv4" == "true" && -t 1 ]]; then
+      if [[ "$has_ipv4" == "true" && "$OUTPUT_IS_TTY" -eq 1 ]]; then
         printf "%s) ${green}%s%s${reset}\n" "$idx" "$display_label" "$status_suffix"
       else
         echo "$idx) $display_label$status_suffix"
@@ -2213,6 +2218,7 @@ run_task_with_compact_output() {
   local reset='\033[0m'
   local i=0
   local pid
+  local debug_target="/dev/null"
   local -a spin_frames
 
   if [[ "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" == *"UTF-8"* || "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" == *"utf8"* ]]; then
@@ -2221,9 +2227,13 @@ run_task_with_compact_output() {
     spin_frames=("-" "\\" "|" "/")
   fi
 
+  if [[ -n "$SESSION_DEBUG_LOG" ]]; then
+    debug_target="$SESSION_DEBUG_LOG"
+  fi
+
   printf "Running Function %s (%s): " "$func_id" "$func_name"
 
-  run_task_by_id "$func_id" >/dev/null 2>&1 &
+  run_task_by_id "$func_id" >>"$debug_target" 2>&1 &
   pid=$!
 
   while kill -0 "$pid" 2>/dev/null; do
