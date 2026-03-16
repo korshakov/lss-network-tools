@@ -436,7 +436,11 @@ select_interface() {
           echo "$idx) $iface"
         fi
       else
-        echo "$idx) $iface"
+        if interface_has_ipv4 "$iface"; then
+          echo "$idx) $iface"
+        else
+          echo "$idx) $iface (no IPv4 address detected)"
+        fi
       fi
       idx=$((idx + 1))
     done
@@ -451,6 +455,12 @@ select_interface() {
     if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#interfaces[@]} )); then
       SELECTED_INTERFACE="${interfaces[$((choice - 1))]}"
       clear_screen_if_supported
+      if ! interface_has_ipv4 "$SELECTED_INTERFACE"; then
+        echo "Warning: $SELECTED_INTERFACE does not currently have an IPv4 address."
+        echo "Interface info and network-range scans may fail on bridge/physical-only interfaces."
+        echo "On Proxmox or Debian bridge hosts, you may want a bridge interface such as vmbr0 instead."
+        echo
+      fi
       return
     fi
 
@@ -549,6 +559,18 @@ get_interface_details() {
   printf '%s|%s|%s|%s|%s\n' "$ip" "$mask" "$prefix" "$mac" "$gateway"
 }
 
+interface_has_ipv4() {
+  local iface="$1"
+  local details=""
+  local ip=""
+  local mask=""
+
+  details="$(get_interface_details "$iface")"
+  IFS='|' read -r ip mask _ _ _ <<< "$details"
+
+  [[ -n "$ip" && -n "$mask" ]]
+}
+
 interface_info() {
   local iface="$1"
   local silent_mode="${2:-}"
@@ -567,7 +589,7 @@ interface_info() {
     if [[ "$silent_mode" != "silent" ]]; then
       echo "Unable to determine IP or subnet for interface $iface"
     fi
-    return
+    return 1
   fi
 
   if [[ -z "$prefix" ]]; then
@@ -615,6 +637,8 @@ interface_info() {
   if [[ "$silent_mode" != "silent" ]]; then
     echo "Saved JSON: $(task_output_path 1)"
   fi
+
+  return 0
 }
 
 get_gateway_ip() {
@@ -815,7 +839,7 @@ scan_servers_by_ports() {
   network="$(get_interface_network_cidr "$SELECTED_INTERFACE")"
   if [[ -z "$network" ]]; then
     echo "Unable to determine network range for $SELECTED_INTERFACE"
-    return
+    return 1
   fi
 
   echo "Done."
@@ -911,6 +935,7 @@ scan_servers_by_ports() {
   echo "$title results found: $result_count"
   echo "Saved JSON: $json_file"
   validate_json_file "$json_file"
+  return 0
 }
 
 
@@ -1338,6 +1363,18 @@ calculate_ping_metric_from_output() {
   ' "$file"
 }
 
+run_ping_stage() {
+  local output_file="$1"
+  shift
+
+  "$@" > "$output_file" 2>&1 &
+  local ping_pid=$!
+  spinner "Running..."
+  if ! wait "$ping_pid"; then
+    return 1
+  fi
+}
+
 parse_ping_metric() {
   local summary_line="$1"
   local metric_index="$2"
@@ -1381,6 +1418,14 @@ gateway_stress_test() {
   local slow_recovery=false
   local returned_to_baseline=false
   local json_file
+  local stage_warning=""
+  local stage_failure=false
+  local baseline_status="ok"
+  local jitter_status="ok"
+  local large_status="ok"
+  local sustained_status="ok"
+  local recovery_status="ok"
+  local ramping_status="ok"
 
   if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
     echo
@@ -1436,19 +1481,25 @@ gateway_stress_test() {
   recovery_file="$(mktemp)"
 
   echo "Stage 2: Baseline latency test (20 pings)..."
-  ping -c 20 "$gateway" > "$baseline_file" 2>&1 &
-  spinner "Running..."
-  wait
+  if ! run_ping_stage "$baseline_file" ping -c 20 "$gateway"; then
+    baseline_status="failed"
+    stage_failure=true
+    echo "Warning: baseline latency test failed. Continuing with remaining stages."
+  fi
 
   echo "Stage 3: Jitter test (200 pings @ 0.05s interval)..."
-  ping -i 0.05 -c 200 "$gateway" > "$jitter_file" 2>&1 &
-  spinner "Running..."
-  wait
+  if ! run_ping_stage "$jitter_file" ping -i 0.05 -c 200 "$gateway"; then
+    jitter_status="failed"
+    stage_failure=true
+    echo "Warning: jitter test failed. Continuing with remaining stages."
+  fi
 
   echo "Stage 4: Large packet test (100 pings @ 1400 bytes)..."
-  ping -s 1400 -c 100 "$gateway" > "$large_file" 2>&1 &
-  spinner "Running..."
-  wait
+  if ! run_ping_stage "$large_file" ping -s 1400 -c 100 "$gateway"; then
+    large_status="failed"
+    stage_failure=true
+    echo "Warning: large packet test failed. Continuing with remaining stages."
+  fi
 
   echo "Stage 5: Ramping test (20 pings per packet size)..."
   for size in "${ramp_sizes[@]}"; do
@@ -1456,24 +1507,27 @@ gateway_stress_test() {
     ramping_files+=("$ramp_file")
   done
 
-  (
-    for idx in "${!ramp_sizes[@]}"; do
-      ping -s "${ramp_sizes[$idx]}" -c 20 "$gateway" > "${ramping_files[$idx]}" 2>&1
-    done
-  ) &
-
-  spinner "Running..."
-  wait
+  for idx in "${!ramp_sizes[@]}"; do
+    if ! run_ping_stage "${ramping_files[$idx]}" ping -s "${ramp_sizes[$idx]}" -c 20 "$gateway"; then
+      ramping_status="partial"
+      stage_failure=true
+      echo "Warning: ramping test failed for packet size ${ramp_sizes[$idx]}. Continuing with remaining stages."
+    fi
+  done
 
   echo "Stage 6: Sustained load test (300 pings @ 0.02s interval)..."
-  ping -i 0.02 -c 300 "$gateway" > "$sustained_file" 2>&1 &
-  spinner "Running..."
-  wait
+  if ! run_ping_stage "$sustained_file" ping -i 0.02 -c 300 "$gateway"; then
+    sustained_status="failed"
+    stage_failure=true
+    echo "Warning: sustained load test failed. Continuing with remaining stages."
+  fi
 
   echo "Stage 7: Recovery test (30 pings)..."
-  ping -c 30 "$gateway" > "$recovery_file" 2>&1 &
-  spinner "Running..."
-  wait
+  if ! run_ping_stage "$recovery_file" ping -c 30 "$gateway"; then
+    recovery_status="failed"
+    stage_failure=true
+    echo "Warning: recovery test failed. Continuing to build partial results."
+  fi
 
   baseline_summary="$(extract_ping_summary_line "$baseline_file")"
   jitter_summary="$(extract_ping_summary_line "$jitter_file")"
@@ -1546,12 +1600,26 @@ gateway_stress_test() {
     returned_to_baseline=true
   fi
 
+  if [[ "$stage_failure" == "true" ]]; then
+    stage_warning="One or more gateway stress sub-tests failed on this host or gateway. Results may be partial."
+  fi
+
   json_file="$(task_output_path 9)"
   {
     echo "{"
     echo "  \"function\": \"gateway_stress_test\"," 
     echo "  \"gateway\": \"$gateway\"," 
     echo "  \"interface\": \"$iface\"," 
+    echo "  \"completed_with_warnings\": $stage_failure,"
+    echo "  \"warning\": $(printf '%s' "$stage_warning" | jq -R .),"
+    echo "  \"stage_status\": {"
+    echo "    \"baseline\": \"$baseline_status\","
+    echo "    \"jitter\": \"$jitter_status\","
+    echo "    \"large_packet\": \"$large_status\","
+    echo "    \"ramping\": \"$ramping_status\","
+    echo "    \"sustained\": \"$sustained_status\","
+    echo "    \"recovery\": \"$recovery_status\""
+    echo "  },"
     echo "  \"baseline\": {"
     echo "    \"avg_latency_ms\": $baseline_avg,"
     echo "    \"max_latency_ms\": $baseline_max,"
@@ -1941,9 +2009,13 @@ render_gateway_stress_report() {
   local file="$1"
   local report_file="$2"
   local gateway iface baseline_avg sustained_avg high_jitter latency_under_load packet_loss slow_recovery
+  local completed_with_warnings warning stage_status
 
   gateway="$(jq -r '.gateway // "unknown"' "$file" 2>/dev/null)"
   iface="$(jq -r '.interface // "unknown"' "$file" 2>/dev/null)"
+  completed_with_warnings="$(jq -r '.completed_with_warnings // false' "$file" 2>/dev/null)"
+  warning="$(jq -r '.warning // empty' "$file" 2>/dev/null)"
+  stage_status="$(jq -r '.stage_status // {} | to_entries | map("\(.key)=\(.value)") | join(", ")' "$file" 2>/dev/null)"
   baseline_avg="$(jq -r '.baseline.avg_latency_ms // "unavailable"' "$file" 2>/dev/null)"
   sustained_avg="$(jq -r '.sustained_test.avg_latency_ms // "unavailable"' "$file" 2>/dev/null)"
   high_jitter="$(jq -r '.indicators.high_jitter // false' "$file" 2>/dev/null)"
@@ -1954,6 +2026,13 @@ render_gateway_stress_report() {
   {
     echo "Gateway IP: ${gateway}"
     echo "Interface: ${iface}"
+    echo "Completed With Warnings: ${completed_with_warnings}"
+    if [[ -n "$warning" ]]; then
+      echo "Warning: ${warning}"
+    fi
+    if [[ -n "$stage_status" ]]; then
+      echo "Stage Status: ${stage_status}"
+    fi
     echo "Baseline Avg Latency: ${baseline_avg} ms"
     echo "Sustained Avg Latency: ${sustained_avg} ms"
     echo "High Jitter: ${high_jitter}"
