@@ -1123,7 +1123,7 @@ gateway_details() {
 
 extract_ping_summary_line() {
   local file="$1"
-  awk '/(round-trip|min\/avg\/max)/ && /stddev|mdev/ { line=$0 } END { print line }' "$file"
+  awk '/(round-trip|rtt|min\/avg\/max)/ && /(stddev|mdev|min\/avg\/max)/ { line=$0 } END { print line }' "$file"
 }
 
 extract_ping_loss_percent() {
@@ -1136,12 +1136,90 @@ extract_ping_loss_percent() {
   }' "$file"
 }
 
+calculate_ping_metric_from_output() {
+  local file="$1"
+  local metric="$2"
+
+  awk -v metric="$metric" '
+    {
+      line = $0
+      value = ""
+
+      if (line ~ /time=/) {
+        sub(/^.*time=/, "", line)
+        value = line
+      } else if (line ~ /time</) {
+        sub(/^.*time</, "", line)
+        value = line
+      } else {
+        next
+      }
+
+      sub(/ ms.*$/, "", value)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+
+      if (value == "1" && $0 ~ /time</) {
+        value = "0.5"
+      }
+
+      if (value !~ /^[0-9.]+$/) {
+        next
+      }
+
+      num = value + 0
+      count++
+      sum += num
+      sumsq += (num * num)
+
+      if (count == 1 || num > max) {
+        max = num
+      }
+    }
+    END {
+      if (count == 0) {
+        exit
+      }
+
+      avg = sum / count
+      variance = (sumsq / count) - (avg * avg)
+      if (variance < 0) {
+        variance = 0
+      }
+      stddev = sqrt(variance)
+
+      if (metric == "avg") {
+        printf "%.3f", avg
+      } else if (metric == "max") {
+        printf "%.3f", max
+      } else if (metric == "stddev") {
+        printf "%.3f", stddev
+      }
+    }
+  ' "$file"
+}
+
 parse_ping_metric() {
   local summary_line="$1"
   local metric_index="$2"
+  local file="${3:-}"
   local value
   value="$(echo "$summary_line" | awk -F'=' '{print $2}' | awk -F'/' -v idx="$metric_index" '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $idx); print $idx}')"
-  echo "$value" | sed 's/[^0-9.]*//g'
+  value="$(echo "$value" | sed 's/[^0-9.]*//g')"
+
+  if [[ -n "$value" ]]; then
+    echo "$value"
+    return
+  fi
+
+  if [[ -z "$file" ]]; then
+    return
+  fi
+
+  case "$metric_index" in
+    2) calculate_ping_metric_from_output "$file" "avg" ;;
+    3) calculate_ping_metric_from_output "$file" "max" ;;
+    4) calculate_ping_metric_from_output "$file" "stddev" ;;
+  esac
 }
 
 gateway_stress_test() {
@@ -1251,22 +1329,22 @@ gateway_stress_test() {
   sustained_summary="$(extract_ping_summary_line "$sustained_file")"
   recovery_summary="$(extract_ping_summary_line "$recovery_file")"
 
-  baseline_avg="$(parse_ping_metric "$baseline_summary" 2)"
-  baseline_max="$(parse_ping_metric "$baseline_summary" 3)"
-  baseline_stddev="$(parse_ping_metric "$baseline_summary" 4)"
+  baseline_avg="$(parse_ping_metric "$baseline_summary" 2 "$baseline_file")"
+  baseline_max="$(parse_ping_metric "$baseline_summary" 3 "$baseline_file")"
+  baseline_stddev="$(parse_ping_metric "$baseline_summary" 4 "$baseline_file")"
 
-  jitter_stddev="$(parse_ping_metric "$jitter_summary" 4)"
-  jitter_max="$(parse_ping_metric "$jitter_summary" 3)"
+  jitter_stddev="$(parse_ping_metric "$jitter_summary" 4 "$jitter_file")"
+  jitter_max="$(parse_ping_metric "$jitter_summary" 3 "$jitter_file")"
   jitter_loss="$(extract_ping_loss_percent "$jitter_file")"
 
-  large_avg="$(parse_ping_metric "$large_summary" 2)"
-  large_max="$(parse_ping_metric "$large_summary" 3)"
+  large_avg="$(parse_ping_metric "$large_summary" 2 "$large_file")"
+  large_max="$(parse_ping_metric "$large_summary" 3 "$large_file")"
   large_loss="$(extract_ping_loss_percent "$large_file")"
 
   for idx in "${!ramp_sizes[@]}"; do
     ramp_summary="$(extract_ping_summary_line "${ramping_files[$idx]}")"
-    ramp_avg="$(parse_ping_metric "$ramp_summary" 2)"
-    ramp_max="$(parse_ping_metric "$ramp_summary" 3)"
+    ramp_avg="$(parse_ping_metric "$ramp_summary" 2 "${ramping_files[$idx]}")"
+    ramp_max="$(parse_ping_metric "$ramp_summary" 3 "${ramping_files[$idx]}")"
     ramp_loss="$(extract_ping_loss_percent "${ramping_files[$idx]}")"
     [[ -z "$ramp_avg" ]] && ramp_avg="0"
     [[ -z "$ramp_max" ]] && ramp_max="0"
@@ -1276,11 +1354,11 @@ gateway_stress_test() {
     ramping_losses+=("$ramp_loss")
   done
 
-  sustained_avg="$(parse_ping_metric "$sustained_summary" 2)"
-  sustained_max="$(parse_ping_metric "$sustained_summary" 3)"
+  sustained_avg="$(parse_ping_metric "$sustained_summary" 2 "$sustained_file")"
+  sustained_max="$(parse_ping_metric "$sustained_summary" 3 "$sustained_file")"
   sustained_loss="$(extract_ping_loss_percent "$sustained_file")"
 
-  recovery_avg="$(parse_ping_metric "$recovery_summary" 2)"
+  recovery_avg="$(parse_ping_metric "$recovery_summary" 2 "$recovery_file")"
 
   [[ -z "$baseline_avg" ]] && baseline_avg="0"
   [[ -z "$baseline_max" ]] && baseline_max="0"
