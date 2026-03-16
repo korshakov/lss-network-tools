@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OS=""
+PKG_PREFIX=()
 
 log() {
   echo "[install] $*"
@@ -20,6 +21,16 @@ detect_os() {
   esac
 }
 
+setup_package_prefix() {
+  if [[ "$EUID" -eq 0 ]]; then
+    PKG_PREFIX=()
+  elif command -v sudo >/dev/null 2>&1; then
+    PKG_PREFIX=(sudo)
+  else
+    PKG_PREFIX=()
+  fi
+}
+
 ensure_brew_shellenv() {
   if [[ -x "/opt/homebrew/bin/brew" ]]; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
@@ -31,6 +42,11 @@ ensure_brew_shellenv() {
 }
 
 install_homebrew() {
+  if [[ "$OS" == "linux" && "$EUID" -eq 0 ]]; then
+    log "Running as root on Linux. Skipping Homebrew bootstrap and using system packages when available."
+    return
+  fi
+
   if command -v brew >/dev/null 2>&1; then
     ensure_brew_shellenv
     return
@@ -40,8 +56,8 @@ install_homebrew() {
 
   if [[ "$OS" == "linux" ]]; then
     if ! command -v curl >/dev/null 2>&1; then
-      sudo apt-get update
-      sudo apt-get install -y curl
+      "${PKG_PREFIX[@]}" apt-get update
+      "${PKG_PREFIX[@]}" apt-get install -y curl
     fi
   fi
 
@@ -99,19 +115,43 @@ brew_install_first_available() {
 }
 
 install_required_tools() {
-  brew update
+  if command -v brew >/dev/null 2>&1; then
+    brew update
+  fi
 
-  brew_install_if_missing nmap nmap
-  brew_install_if_missing awk gawk
-  brew_install_if_missing sed gnu-sed
-  brew_install_if_missing grep grep
-  brew_install_if_missing find findutils
-  brew_install_if_missing mktemp coreutils
-  brew_install_if_missing sudo sudo
+  if command -v brew >/dev/null 2>&1; then
+    brew_install_if_missing nmap nmap
+    brew_install_if_missing awk gawk
+    brew_install_if_missing sed gnu-sed
+    brew_install_if_missing grep grep
+    brew_install_if_missing find findutils
+    brew_install_if_missing mktemp coreutils
+  fi
 
   if [[ "$OS" == "linux" ]]; then
-    brew_install_first_available ip iproute2 iproute2mac
-    brew_install_first_available route net-tools
+    if command -v brew >/dev/null 2>&1; then
+      brew_install_first_available ip iproute2 iproute2mac
+      brew_install_first_available route net-tools
+    fi
+
+    if command -v apt-get >/dev/null 2>&1; then
+      if ! command -v nmap >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1 || ! command -v ip >/dev/null 2>&1; then
+        "${PKG_PREFIX[@]}" apt-get update
+      fi
+      command -v nmap >/dev/null 2>&1 || "${PKG_PREFIX[@]}" apt-get install -y nmap
+      command -v jq >/dev/null 2>&1 || "${PKG_PREFIX[@]}" apt-get install -y jq
+      command -v ip >/dev/null 2>&1 || "${PKG_PREFIX[@]}" apt-get install -y iproute2
+      if ! command -v route >/dev/null 2>&1 && ! command -v ifconfig >/dev/null 2>&1; then
+        "${PKG_PREFIX[@]}" apt-get install -y net-tools
+      fi
+    elif command -v dnf >/dev/null 2>&1; then
+      command -v nmap >/dev/null 2>&1 || "${PKG_PREFIX[@]}" dnf install -y nmap
+      command -v jq >/dev/null 2>&1 || "${PKG_PREFIX[@]}" dnf install -y jq
+      command -v ip >/dev/null 2>&1 || "${PKG_PREFIX[@]}" dnf install -y iproute
+      if ! command -v route >/dev/null 2>&1 && ! command -v ifconfig >/dev/null 2>&1; then
+        "${PKG_PREFIX[@]}" dnf install -y net-tools
+      fi
+    fi
   fi
 
   if [[ "$OS" == "macos" ]]; then
@@ -142,13 +182,15 @@ install_speedtest_cli() {
       return
     fi
   elif [[ "$OS" == "linux" ]]; then
-    if command -v apt >/dev/null 2>&1; then
-      sudo apt update
-      sudo apt install -y speedtest-cli
+    if command -v apt-get >/dev/null 2>&1; then
+      "${PKG_PREFIX[@]}" apt-get update
+      "${PKG_PREFIX[@]}" apt-get install -y speedtest-cli
     elif command -v dnf >/dev/null 2>&1; then
-      sudo dnf install -y speedtest-cli
+      "${PKG_PREFIX[@]}" dnf install -y speedtest-cli
+    elif command -v brew >/dev/null 2>&1; then
+      brew install speedtest-cli
     else
-      log "[WARN] No supported package manager found (apt or dnf) for speedtest-cli installation"
+      log "[WARN] No supported package manager found (apt-get, dnf, or brew) for speedtest-cli installation"
       return
     fi
   fi
@@ -161,6 +203,7 @@ install_speedtest_cli() {
 }
 
 detect_os
+setup_package_prefix
 install_homebrew
 install_required_tools
 install_speedtest_cli
