@@ -12,6 +12,9 @@ RUN_LOCATION=""
 RUN_CLIENT_SLUG=""
 RUN_LOCATION_SLUG=""
 RUN_REPORT_FILE=""
+HIGH_IMPACT_STRESS_CONFIRMED=0
+SESSION_DEBUG_LOG=""
+RUN_DEBUG_LOG=""
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -53,6 +56,31 @@ wait_for_pid() {
   fi
 }
 
+confirm_gateway_stress_operation() {
+  local context_label="${1:-Function 9}"
+  local confirmation=""
+
+  if [[ "$HIGH_IMPACT_STRESS_CONFIRMED" -eq 1 ]]; then
+    return 0
+  fi
+
+  echo
+  echo "WARNING: $context_label includes Gateway Stress Test."
+  echo "This test only targets the detected local gateway/firewall with ICMP."
+  echo "It does not target remote internet hosts, but it can disrupt local routing, VPNs, WAN access, or unstable firewalls."
+  echo "Run this only when you accept possible service impact."
+  echo "Consider disconnecting the local gateway from internet or performing this after-hours if disruption would be unacceptable."
+  read -r -p "Type PROCEED to continue: " confirmation
+
+  if [[ "$confirmation" != "PROCEED" ]]; then
+    echo "Gateway Stress Test cancelled."
+    return 1
+  fi
+
+  HIGH_IMPACT_STRESS_CONFIRMED=1
+  return 0
+}
+
 task_field() {
   local task_id="$1"
   local field_index="$2"
@@ -78,6 +106,16 @@ current_output_dir() {
   else
     echo "$OUTPUT_DIR"
   fi
+}
+
+initialize_debug_logging() {
+  if [[ -n "$SESSION_DEBUG_LOG" ]]; then
+    return
+  fi
+
+  SESSION_DEBUG_LOG="$OUTPUT_DIR/.debug-session-$$.txt"
+  : > "$SESSION_DEBUG_LOG"
+  exec > >(tee -a "$SESSION_DEBUG_LOG") 2>&1
 }
 
 task_output_path() {
@@ -110,6 +148,7 @@ initialize_run_context() {
   RUN_REPORT_TIME_STAMP="$(date '+%H-%M')"
   RUN_OUTPUT_DIR="$OUTPUT_DIR/${RUN_CLIENT_SLUG}-${RUN_LOCATION_SLUG}-${RUN_DATE_STAMP}"
   RUN_REPORT_FILE="$RUN_OUTPUT_DIR/lss-network-tools-report-${RUN_CLIENT_SLUG}-${RUN_LOCATION_SLUG}-${RUN_DATE_STAMP}-${RUN_REPORT_TIME_STAMP}.txt"
+  RUN_DEBUG_LOG="$RUN_OUTPUT_DIR/debug.txt"
 
   mkdir -p "$RUN_OUTPUT_DIR"
 
@@ -234,6 +273,10 @@ build_report_for_current_run() {
 finalize_run() {
   if [[ -n "$RUN_OUTPUT_DIR" ]] && [[ -n "$(find "$RUN_OUTPUT_DIR" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null)" ]]; then
     build_report_for_current_run || true
+  fi
+
+  if [[ -n "$RUN_OUTPUT_DIR" && -n "$SESSION_DEBUG_LOG" && -f "$SESSION_DEBUG_LOG" ]]; then
+    cp "$SESSION_DEBUG_LOG" "$RUN_DEBUG_LOG" 2>/dev/null || true
   fi
 }
 
@@ -413,6 +456,11 @@ select_interface() {
   local interfaces=()
   local idx=1
   local choice
+  local display_label
+  local status_suffix
+  local green='\033[0;32m'
+  local reset='\033[0m'
+  local has_ipv4=false
 
   while IFS= read -r iface; do
     interfaces+=("$iface")
@@ -427,20 +475,32 @@ select_interface() {
     echo
     echo "Select Network Interface"
     for iface in "${interfaces[@]}"; do
+      display_label="$iface"
+      status_suffix=""
+      has_ipv4=false
+
       if [[ "$OS" == "macos" ]]; then
         local description
         description="$(get_interface_description "$iface")"
         if [[ -n "$description" ]]; then
-          echo "$idx) $iface ($description)"
-        else
-          echo "$idx) $iface"
+          display_label="$iface ($description)"
         fi
+      fi
+
+      if interface_has_ipv4 "$iface"; then
+        has_ipv4=true
       else
-        if interface_has_ipv4 "$iface"; then
-          echo "$idx) $iface"
-        else
-          echo "$idx) $iface (no IPv4 address detected)"
-        fi
+        status_suffix=" (no IPv4 address detected)"
+      fi
+
+      if [[ "$iface" == "lo0" ]]; then
+        status_suffix=" (loopback)"
+      fi
+
+      if [[ "$has_ipv4" == "true" && -t 1 ]]; then
+        printf "%s) ${green}%s%s${reset}\n" "$idx" "$display_label" "$status_suffix"
+      else
+        echo "$idx) $display_label$status_suffix"
       fi
       idx=$((idx + 1))
     done
@@ -1420,6 +1480,7 @@ gateway_stress_test() {
   local json_file
   local stage_warning=""
   local stage_failure=false
+  local warning_json="null"
   local baseline_status="ok"
   local jitter_status="ok"
   local large_status="ok"
@@ -1430,6 +1491,10 @@ gateway_stress_test() {
   if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
     echo
     echo "Gateway Stress Test"
+  fi
+
+  if ! confirm_gateway_stress_operation "Function 9"; then
+    return 1
   fi
 
   if ! command -v ping >/dev/null 2>&1; then
@@ -1603,6 +1668,9 @@ gateway_stress_test() {
   if [[ "$stage_failure" == "true" ]]; then
     stage_warning="One or more gateway stress sub-tests failed on this host or gateway. Results may be partial."
   fi
+  if [[ -n "$stage_warning" ]]; then
+    warning_json="$(printf '%s' "$stage_warning" | jq -R .)"
+  fi
 
   json_file="$(task_output_path 9)"
   {
@@ -1611,7 +1679,7 @@ gateway_stress_test() {
     echo "  \"gateway\": \"$gateway\"," 
     echo "  \"interface\": \"$iface\"," 
     echo "  \"completed_with_warnings\": $stage_failure,"
-    echo "  \"warning\": $(printf '%s' "$stage_warning" | jq -R .),"
+    echo "  \"warning\": $warning_json,"
     echo "  \"stage_status\": {"
     echo "    \"baseline\": \"$baseline_status\","
     echo "    \"jitter\": \"$jitter_status\","
@@ -2196,6 +2264,10 @@ run_all_tasks() {
   local func_id
   local func_name
 
+  if ! confirm_gateway_stress_operation "000 Complete Network Audit"; then
+    return 1
+  fi
+
   read -r -a task_ids <<< "$(get_task_ids)"
 
   for func_id in "${task_ids[@]}"; do
@@ -2281,6 +2353,7 @@ detect_os() {
 }
 
 detect_os
+initialize_debug_logging
 check_tools
 mkdir -p "$OUTPUT_DIR"
 warn_if_not_root

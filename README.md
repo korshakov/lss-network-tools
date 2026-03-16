@@ -33,12 +33,17 @@ After selecting a network interface, the tool provides these scan functions:
 8. **Printer/Print Server Network Scan**  
    Scans for common print service ports (LPD, IPP, JetDirect).
 9. **Gateway Stress Test**  
-   Runs repeated gateway latency and packet-loss checks to spot jitter and recovery issues under load.
+   Runs repeated gateway latency and packet-loss checks to spot jitter and recovery issues under load. This is a high-impact test that targets only the detected local gateway/firewall and may disrupt routing, VPNs, or internet access on weak edge devices.
 
 Additional menu options:
 
 - `000)` **Complete Network Audit** (runs functions 1–9 sequentially)
 - `0)` Exit
+
+High-impact warning:
+- `9)` and `000)` require explicit confirmation before the Gateway Stress Test runs.
+- The stress test targets only the local detected gateway, not remote internet hosts.
+- On fragile or old firewalls, it can still disrupt client connectivity. Run it only when service impact is acceptable.
 
 ## Key workflow features
 
@@ -50,6 +55,7 @@ Additional menu options:
 - **Speedtest timeout protection** (fails gracefully if it takes too long).
 - **JSON output for every scan** for automation and post-processing.
 - **DHCP evidence capture** with unique responders, raw offer counts, and optional relay/proxy source visibility when `tcpdump` is available.
+- **Per-run debug log** captured as `debug.txt` in the run folder for troubleshooting.
 - **Automatic report build on exit** into the same run folder as the JSON results.
 
 ## Supported platforms
@@ -81,6 +87,7 @@ Run from repo root:
 
 > Some scans (notably DHCP discovery) may require root privileges. On Linux root servers, the installer prefers native packages and does not require `sudo`.
 > If `tcpdump` is installed and the tool is running as root, DHCP scan output will also record relay or proxy packet sources to help explain duplicate offers.
+> Gateway Stress Test is intentionally high-impact. Consider disconnecting the client gateway from internet or running it after-hours if disruption would be unacceptable.
 
 ## Output
 
@@ -107,6 +114,7 @@ Possible files inside a run folder:
 - `smb-nfs-scan.json`
 - `print-server-scan.json`
 - `gateway-stress-test.json`
+- `debug.txt`
 - `lss-network-tools-report-<client>-<location>-DD-MM-YYYY-HH-MM.txt`
 
 The report includes:
