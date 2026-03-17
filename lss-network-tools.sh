@@ -5567,7 +5567,6 @@ if [[ "$UNINSTALL_MODE" -eq 1 ]]; then
   uninstall_installed_application
   exit $?
 fi
-clear_screen_if_supported
 check_tools
 warn_if_not_root
 startup_menu
