@@ -1,6 +1,6 @@
 # lss-network-tools
 
-Interactive network diagnostics for **macOS** and **Linux**, with per-run JSON exports and a consolidated human-readable report stored in the same run folder.
+Interactive network diagnostics for **macOS** and **Linux**, with per-run JSON exports, a consolidated human-readable report, and utilities for rebuilding reports from previous runs.
 
 The tool is designed for interactive onsite diagnostics: run a daily audit for the local network, then optionally add one-off custom target scans into the same day folder without overwriting earlier results.
 
@@ -16,7 +16,7 @@ chmod +x *.sh
 
 ## What it does
 
-After selecting a network interface, the tool provides these scan functions:
+After choosing `Run LSS Network Tools` from the startup menu and selecting a network interface, the tool provides these scan functions:
 
 1. **Interface Network Info**  
    Captures IP address, subnet mask, network range (CIDR), and MAC address.
@@ -50,6 +50,14 @@ Additional menu options:
 - `000)` **Complete Network Audit** (runs functions 1–9 sequentially)
 - `0)` Exit
 
+Startup menu utilities:
+
+- `1)` **Run LSS Network Tools**
+- `2)` **Build LSS Network Tools Report From Previous Run**
+- `3)` **Delete All Previous Runs**
+- `4)` **Check For Updates**
+- `5)` Exit
+
 High-impact warning:
 - `9)`, `11)`, and `000)` require typing `PROCEED` before a stress test runs.
 - Stress tests send high-rate ICMP only to the chosen target and do not perform exploits or service attacks.
@@ -58,6 +66,7 @@ High-impact warning:
 ## Key workflow features
 
 - **Dependency checklist at startup** with optional auto-install via `install.sh` when required tools are missing.
+- **Startup utility menu** for running scans, rebuilding reports from previous runs, deleting stored runs, and checking for updates.
 - **Interactive interface selector** (on macOS, includes hardware port descriptions when available).
 - **Run context prompt** for location and client name after interface selection.
 - **Timestamped run folder per session** under `output/`, so prior runs stay intact.
@@ -74,6 +83,8 @@ High-impact warning:
 - **Per-run debug log** captured as `debug.txt` in the run folder for troubleshooting.
 - **Optional `--debug` mode** that disables spinner redraws and keeps the session log much easier to troubleshoot.
 - **Automatic report build on exit** into the same run folder as the JSON results.
+- **Previous-run report rebuild** that can export a fresh TXT report to Desktop or another chosen directory without creating a new scan run.
+- **Tag-based update check** that compares the local version with the latest remote Git tag and can pull updates after confirmation.
 
 ## Supported platforms
 
@@ -112,6 +123,7 @@ For cleaner troubleshooting output without spinner redraws:
 > If `tcpdump` is installed and the tool is running as root, DHCP scan output will also record relay or proxy packet sources to help explain duplicate offers.
 > If `curl` is available, Function `13` can also use an online MAC vendor lookup fallback when local vendor detection is incomplete.
 > Stress tests are intentionally high-impact. If the target is a client gateway or firewall, consider disconnecting it from internet or running it after-hours if disruption would be unacceptable.
+> `Check For Updates` works best in a normal Git clone with a configured `origin` remote. For private repositories, Git authentication may be required.
 
 ## Output
 
@@ -153,6 +165,8 @@ The report includes:
 - Executed vs not-executed function summary
 - Per-function sections generated from available JSON scan files
 - Per-device sections for repeated custom target scans
+- Key Findings
+- Remediation Hints
 
 The manifest includes:
 
@@ -186,3 +200,5 @@ The custom DNS assessment includes:
 - `000)` can take a long time in larger networks.
 - If `speedtest-cli` is unavailable or fails, other scan functions still work independently.
 - Custom target functions `10`, `11`, `13`, and `14` are manual-only and are not included in `000)`.
+- `Build LSS Network Tools Report From Previous Run` uses saved JSON data from an existing run folder and does not create a new scan run.
+- `Check For Updates` compares local and remote Git tags. If no remote tags exist yet, it will report that no published versions are available.

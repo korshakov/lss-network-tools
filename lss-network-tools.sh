@@ -872,7 +872,7 @@ check_for_updates() {
 
   echo
   echo "An update is available."
-  read -r -p "Type UPDATE to fetch tags and pull the latest changes from origin/$current_branch: " confirmation
+  read -r -p "Type UPDATE to fetch tags and pull the latest changes from origin/$current_branch, or CANCEL to return to the startup menu: " confirmation
 
   if [[ "$confirmation" != "UPDATE" ]]; then
     echo "Update cancelled."
