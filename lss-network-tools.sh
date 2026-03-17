@@ -37,6 +37,7 @@ TASKS_DATA=$(cat <<'TASKS'
 10|Custom Target Port Scan|custom-target-port-scan.json
 11|Custom Target Stress Test|custom-target-stress-test.json
 13|Custom Target Identity Scan|custom-target-identity-scan.json
+14|Custom Target DNS Assessment|custom-target-dns-assessment.json
 TASKS
 )
 
@@ -170,7 +171,7 @@ task_output_path() {
 
 task_supports_multiple_entries() {
   case "$1" in
-    10|11|13) return 0 ;;
+    10|11|13|14) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -507,6 +508,7 @@ build_report_for_current_run() {
         10) render_custom_target_port_scan_report "$file_path" "$report_file" ;;
         11) render_custom_target_stress_report "$file_path" "$report_file" ;;
         13) render_custom_target_identity_report "$file_path" "$report_file" ;;
+        14) render_custom_target_dns_assessment_report "$file_path" "$report_file" ;;
       esac
 
       echo >> "$report_file"
@@ -668,6 +670,7 @@ check_tools() {
   local missing=0
   local red='[0;31m'
   local green='[0;32m'
+  local yellow='[1;33m'
   local reset='[0m'
   local base_tools=(nmap awk sed grep find mktemp jq speedtest-cli)
   local os_tools=()
@@ -682,7 +685,10 @@ check_tools() {
   fi
 
   echo
-  echo "Dependency checklist"
+  printf "${yellow}Startup Check${reset}\n"
+  printf "${yellow}========================${reset}\n"
+  echo
+  echo "Dependency Checklist:"
 
   for tool in "${base_tools[@]}" "${os_tools[@]}"; do
     if command -v "$tool" >/dev/null 2>&1; then
@@ -703,6 +709,7 @@ check_tools() {
   done
 
   if [[ "$OS" == "linux" ]] && ! command -v ifconfig >/dev/null 2>&1; then
+    echo
     echo "Optional fallback missing: ifconfig"
     echo "Install with: apt install net-tools"
   fi
@@ -765,6 +772,11 @@ check_tools() {
       esac
     done
   fi
+
+  if [[ "$missing" -eq 0 ]]; then
+    echo
+    printf "${green}All required dependencies are available.${reset}\n"
+  fi
 }
 
 
@@ -804,13 +816,18 @@ get_interface_description() {
 
 select_interface() {
   local interfaces=()
+  local ordered_interfaces=()
+  local ipv4_interfaces=()
+  local other_interfaces=()
   local idx=1
   local choice
   local display_label
   local status_suffix
   local green='\033[0;32m'
+  local yellow='\033[1;33m'
   local reset='\033[0m'
   local has_ipv4=false
+  local section_printed=false
 
   while IFS= read -r iface; do
     interfaces+=("$iface")
@@ -822,12 +839,32 @@ select_interface() {
   fi
 
   while true; do
-    echo
-    echo "Select Network Interface"
+    ordered_interfaces=()
+    ipv4_interfaces=()
+    other_interfaces=()
+
     for iface in "${interfaces[@]}"; do
+      if interface_has_ipv4 "$iface"; then
+        ipv4_interfaces+=("$iface")
+      else
+        other_interfaces+=("$iface")
+      fi
+    done
+    ordered_interfaces=("${ipv4_interfaces[@]}" "${other_interfaces[@]}")
+
+    echo
+    printf "${yellow}Select Network Interface${reset}\n"
+    printf "${yellow}========================${reset}\n"
+    echo
+    if [[ "${#ipv4_interfaces[@]}" -gt 0 ]]; then
+      echo "Active Interfaces:"
+    fi
+    idx=1
+    for iface in "${ordered_interfaces[@]}"; do
       display_label="$iface"
       status_suffix=""
       has_ipv4=false
+      section_printed=false
 
       if [[ "$OS" == "macos" ]]; then
         local description
@@ -838,13 +875,24 @@ select_interface() {
       fi
 
       if interface_has_ipv4 "$iface"; then
+        local details ip
+        details="$(get_interface_details "$iface")"
+        IFS='|' read -r ip _ _ _ _ <<< "$details"
         has_ipv4=true
+        if [[ -n "$ip" ]]; then
+          display_label="$display_label ($ip)"
+        fi
       else
         status_suffix=" (no IPv4 address detected)"
       fi
 
       if [[ "$iface" == "lo0" ]]; then
         status_suffix=" (loopback)"
+      fi
+
+      if [[ "$has_ipv4" == "false" && "${#ipv4_interfaces[@]}" -gt 0 && "$idx" == "$((${#ipv4_interfaces[@]} + 1))" ]]; then
+        echo
+        echo "Other Interfaces:"
       fi
 
       if [[ "$has_ipv4" == "true" && "$OUTPUT_IS_TTY" -eq 1 ]]; then
@@ -855,6 +903,7 @@ select_interface() {
       idx=$((idx + 1))
     done
     echo "0) Exit"
+    echo
 
     read -r -p "Enter selection: " choice
 
@@ -862,8 +911,8 @@ select_interface() {
       exit 0
     fi
 
-    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#interfaces[@]} )); then
-      SELECTED_INTERFACE="${interfaces[$((choice - 1))]}"
+    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#ordered_interfaces[@]} )); then
+      SELECTED_INTERFACE="${ordered_interfaces[$((choice - 1))]}"
       clear_screen_if_supported
       if ! interface_has_ipv4 "$SELECTED_INTERFACE"; then
         echo "Warning: $SELECTED_INTERFACE does not currently have an IPv4 address."
@@ -875,7 +924,6 @@ select_interface() {
     fi
 
     echo "Invalid selection. Try again."
-    idx=1
   done
 }
 
@@ -1292,8 +1340,7 @@ scan_servers_by_ports() {
   raw_file="$(current_raw_output_dir)/${output_file%.json}-nmap.grep"
   nmap -n -p "$port_list" --open "$network" -oG - > "$scan_file" 2>/dev/null &
   local scan_pid=$!
-  spinner
-  wait_for_pid "$scan_pid" "Port scan failed for network $network." || {
+  monitor_nmap_progress "$scan_pid" "$scan_file" 300 "host_ports" "Matches Found:" "Port scan failed for network $network." || {
     rm -f "$scan_file"
     return 1
   }
@@ -1430,6 +1477,166 @@ ports_to_json_array() {
   echo "[$json]"
 }
 
+ports_to_csv() {
+  local values=("$@")
+  local joined=""
+  local i
+
+  if [[ "${#values[@]}" -eq 0 ]]; then
+    echo "none found"
+    return
+  fi
+
+  for i in "${!values[@]}"; do
+    if [[ "$i" -gt 0 ]]; then
+      joined+=", "
+    fi
+    joined+="${values[$i]}"
+  done
+
+  echo "$joined"
+}
+
+extract_grepable_open_ports_csv() {
+  local file="$1"
+
+  awk '
+    /Ports:/ {
+      split($0, parts, "Ports: ")
+      if (length(parts) < 2) {
+        next
+      }
+
+      n = split(parts[2], ports, ",")
+      for (i = 1; i <= n; i++) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", ports[i])
+        split(ports[i], fields, "/")
+        if (fields[2] == "open" && fields[1] ~ /^[0-9]+$/) {
+          if (!(fields[1] in seen)) {
+            seen[fields[1]] = 1
+            order[++count] = fields[1]
+          }
+        }
+      }
+    }
+    END {
+      for (i = 1; i <= count; i++) {
+        if (i > 1) {
+          printf ", "
+        }
+        printf "%s", order[i]
+      }
+    }
+  ' "$file"
+}
+
+extract_grepable_host_port_matches_csv() {
+  local file="$1"
+
+  awk '
+    /Host: / && /Ports: / {
+      ip = ""
+      if (match($0, /Host: [0-9.]+/)) {
+        ip = substr($0, RSTART + 6, RLENGTH - 6)
+      }
+      if (ip == "") {
+        next
+      }
+
+      split($0, parts, "Ports: ")
+      if (length(parts) < 2) {
+        next
+      }
+
+      n = split(parts[2], p, ",")
+      open = ""
+      for (i = 1; i <= n; i++) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", p[i])
+        split(p[i], f, "/")
+        if (f[2] == "open" && f[1] ~ /^[0-9]+$/) {
+          if (open != "") {
+            open = open ","
+          }
+          open = open f[1]
+        }
+      }
+
+      if (open != "") {
+        latest[ip] = open
+        if (!(ip in seen)) {
+          seen[ip] = 1
+          order[++count] = ip
+        }
+      }
+    }
+    END {
+      for (i = 1; i <= count; i++) {
+        ip = order[i]
+        if (i > 1) {
+          printf ", "
+        }
+        printf "%s(%s)", ip, latest[ip]
+      }
+    }
+  ' "$file"
+}
+
+monitor_nmap_progress() {
+  local pid="$1"
+  local output_file="$2"
+  local timeout_seconds="$3"
+  local mode="$4"
+  local label="$5"
+  local error_message="$6"
+  local start_time elapsed
+  local final_display=""
+
+  start_time="$(date +%s)"
+
+  if [[ "$DEBUG_MODE" -eq 0 ]]; then
+    start_spinner_line "$label"
+  fi
+
+  while kill -0 "$pid" 2>/dev/null; do
+    elapsed=$(( $(date +%s) - start_time ))
+    if (( elapsed >= timeout_seconds )); then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      stop_spinner_line
+      echo "Port scan timed out after ${timeout_seconds}s."
+      return 124
+    fi
+
+    sleep 0.2
+  done
+
+  local process_exit_code=0
+  if ! wait "$pid"; then
+    process_exit_code=$?
+  fi
+
+  stop_spinner_line
+
+  if [[ "$mode" == "host_ports" ]]; then
+    final_display="$(extract_grepable_host_port_matches_csv "$output_file")"
+  else
+    final_display="$(extract_grepable_open_ports_csv "$output_file")"
+  fi
+
+  if [[ -n "$final_display" ]]; then
+    echo "$label $final_display"
+  elif [[ "$DEBUG_MODE" -eq 1 ]]; then
+    echo "$label none found"
+  fi
+
+  if [[ "$process_exit_code" -ne 0 ]]; then
+    echo "$error_message"
+    return "$process_exit_code"
+  fi
+
+  return 0
+}
+
 spinner() {
   local pid=$!
   local message="${1:-Scanning...}"
@@ -1529,6 +1736,127 @@ run_with_stage_spinner() {
   return "$process_exit_code"
 }
 
+monitor_speedtest_progress() {
+  local pid="$1"
+  local output_file="$2"
+  local timeout_seconds="$3"
+  local green='\033[0;32m'
+  local reset='\033[0m'
+  local start_time elapsed
+  local public_ip=""
+  local server_name=""
+  local ping_latency=""
+  local download_speed=""
+  local upload_speed=""
+  local info_printed=0
+  local download_spinner_active=0
+  local upload_spinner_active=0
+  local hosted_line hosted_server hosted_ping
+
+  start_time="$(date +%s)"
+
+  while kill -0 "$pid" 2>/dev/null; do
+    elapsed=$(( $(date +%s) - start_time ))
+    if (( elapsed >= timeout_seconds )); then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      stop_spinner_line
+      echo "Speedtest timed out after ${timeout_seconds}s."
+      return 124
+    fi
+
+    if [[ -z "$public_ip" ]]; then
+      public_ip="$(sed -nE 's/^Testing from .* \(([0-9.]+)\)\.\.\./\1/p' "$output_file" | tail -n 1)"
+    fi
+
+    if [[ -z "$server_name" || -z "$ping_latency" ]]; then
+      hosted_line="$(sed -nE 's/^Hosted by (.*): ([0-9]+([.][0-9]+)?) ms$/\1|\2/p' "$output_file" | tail -n 1)"
+      if [[ -n "$hosted_line" ]]; then
+        hosted_server="${hosted_line%|*}"
+        hosted_ping="${hosted_line##*|}"
+        hosted_server="$(printf '%s' "$hosted_server" | sed 's/ \[[^]]*\]$//')"
+        [[ -n "$hosted_server" ]] && server_name="$hosted_server"
+        [[ -n "$hosted_ping" ]] && ping_latency="$hosted_ping"
+      fi
+    fi
+
+    if [[ "$info_printed" -eq 0 && -n "$public_ip" && -n "$server_name" && -n "$ping_latency" ]]; then
+      echo
+      echo "Public IP: $public_ip"
+      echo "Connected to server: $server_name"
+      echo "Ping: $ping_latency ms"
+      if [[ "$DEBUG_MODE" -eq 0 ]]; then
+        start_spinner_line "Download Speed:"
+      fi
+      download_spinner_active=1
+      info_printed=1
+    fi
+
+    if [[ -z "$download_speed" ]]; then
+      download_speed="$(sed -nE 's/^Download:[[:space:]]+([0-9]+([.][0-9]+)?) Mbit\/s$/\1/p' "$output_file" | tail -n 1)"
+    fi
+
+    if [[ "$download_spinner_active" -eq 1 && -n "$download_speed" ]]; then
+      stop_spinner_line
+      echo "Download Speed: ${download_speed} Mbps"
+      if [[ "$DEBUG_MODE" -eq 0 ]]; then
+        start_spinner_line "Upload Speed:"
+      fi
+      download_spinner_active=0
+      upload_spinner_active=1
+    fi
+
+    if [[ -z "$upload_speed" ]]; then
+      upload_speed="$(sed -nE 's/^Upload:[[:space:]]+([0-9]+([.][0-9]+)?) Mbit\/s$/\1/p' "$output_file" | tail -n 1)"
+    fi
+
+    if [[ "$upload_spinner_active" -eq 1 && -n "$upload_speed" ]]; then
+      stop_spinner_line
+      echo "Upload Speed: ${upload_speed} Mbps"
+      printf "${green}Done.${reset}\n"
+      upload_spinner_active=0
+    fi
+
+    sleep 0.2
+  done
+
+  local process_exit_code=0
+  if ! wait "$pid"; then
+    process_exit_code=$?
+  fi
+
+  stop_spinner_line
+
+  if [[ "$process_exit_code" -ne 0 ]]; then
+    return "$process_exit_code"
+  fi
+
+  if [[ -z "$download_speed" ]]; then
+    download_speed="$(sed -nE 's/^Download:[[:space:]]+([0-9]+([.][0-9]+)?) Mbit\/s$/\1/p' "$output_file" | tail -n 1)"
+  fi
+
+  if [[ -z "$upload_speed" ]]; then
+    upload_speed="$(sed -nE 's/^Upload:[[:space:]]+([0-9]+([.][0-9]+)?) Mbit\/s$/\1/p' "$output_file" | tail -n 1)"
+  fi
+
+  if [[ "$info_printed" -eq 0 ]]; then
+    [[ -n "$public_ip" ]] && echo "Public IP: $public_ip"
+    [[ -n "$server_name" ]] && echo "Connected to server: $server_name"
+    [[ -n "$ping_latency" ]] && echo "Ping: $ping_latency ms"
+  fi
+
+  if [[ "$download_spinner_active" -eq 1 && -n "$download_speed" ]]; then
+    echo "Download Speed: ${download_speed} Mbps"
+  fi
+
+  if [[ "$upload_spinner_active" -eq 1 && -n "$upload_speed" ]]; then
+    echo "Upload Speed: ${upload_speed} Mbps"
+    printf "${green}Done.${reset}\n"
+  fi
+
+  return 0
+}
+
 render_speed_test_report() {
   local file="$1"
   local report_file="$2"
@@ -1597,17 +1925,17 @@ internet_speed_test() {
   fi
 
   if ! command -v jq >/dev/null 2>&1; then
-    echo "jq is required for parsing speedtest JSON output."
+    echo "jq is required for writing speedtest JSON output."
     return 1
   fi
 
   result_file="$(mktemp)"
-  speedtest-cli --secure --json > "$result_file" 2>&1 &
+  speedtest-cli --secure > "$result_file" 2>&1 &
   pid=$!
-  run_with_stage_spinner "$pid" "$timeout_seconds"
+  monitor_speedtest_progress "$pid" "$result_file" "$timeout_seconds"
   exit_code=$?
   result="$(cat "$result_file")"
-  raw_file="$(task_raw_prefix 2)-raw.json"
+  raw_file="$(task_raw_prefix 2)-raw.txt"
   printf '%s\n' "$result" > "$raw_file"
   rm -f "$result_file"
 
@@ -1617,21 +1945,24 @@ internet_speed_test() {
     return 1
   fi
 
-  if ! echo "$result" | jq . >/dev/null 2>&1; then
+  if ! printf '%s\n' "$result" | grep -q '^Download:'; then
     echo "Speedtest failed. Raw output:"
     echo "$result"
     return 1
   fi
 
-  public_ip="$(echo "$result" | jq -r '.client.ip // "unknown"')"
-  raw_server_name="$(echo "$result" | jq -r '.server.name // "unknown"')"
-  raw_server_location="$(echo "$result" | jq -r '.server.location // .server.country // ""')"
-  ping_latency="$(echo "$result" | jq -r '.ping // "unavailable"' | awk '{if ($1=="unavailable") print $1; else printf "%.2f", $1}')"
-  download_speed="$(echo "$result" | jq -r 'if .download then (.download / 1000000) else empty end' | awk '{printf "%.2f", $1}')"
-  upload_speed="$(echo "$result" | jq -r 'if .upload then (.upload / 1000000) else empty end' | awk '{printf "%.2f", $1}')"
+  public_ip="$(printf '%s\n' "$result" | sed -nE 's/^Testing from .* \(([0-9.]+)\)\.\.\./\1/p' | tail -n 1)"
+  raw_server_name="$(printf '%s\n' "$result" | sed -nE 's/^Hosted by (.*): ([0-9]+([.][0-9]+)?) ms$/\1/p' | tail -n 1 | sed 's/ \[[^]]*\]$//')"
+  raw_server_location=""
+  ping_latency="$(printf '%s\n' "$result" | sed -nE 's/^Hosted by (.*): ([0-9]+([.][0-9]+)?) ms$/\2/p' | tail -n 1)"
+  download_speed="$(printf '%s\n' "$result" | sed -nE 's/^Download:[[:space:]]+([0-9]+([.][0-9]+)?) Mbit\/s$/\1/p' | tail -n 1)"
+  upload_speed="$(printf '%s\n' "$result" | sed -nE 's/^Upload:[[:space:]]+([0-9]+([.][0-9]+)?) Mbit\/s$/\1/p' | tail -n 1)"
 
   [[ -z "$download_speed" ]] && download_speed="unavailable"
   [[ -z "$upload_speed" ]] && upload_speed="unavailable"
+  [[ -z "$public_ip" ]] && public_ip="unknown"
+  [[ -z "$raw_server_name" ]] && raw_server_name="unknown"
+  [[ -z "$ping_latency" ]] && ping_latency="unavailable"
 
   server_name="$raw_server_name"
   server_location="$raw_server_location"
@@ -1646,24 +1977,24 @@ internet_speed_test() {
   [[ "$upload_speed" == "unavailable" ]] && upload_display="unavailable"
 
   echo
-  echo "Public IP: $public_ip"
-  echo "Connected to server: $server_name"
-  echo "Ping: $ping_latency ms"
-  echo "Download Speed: $download_display"
-  echo "Upload Speed: $upload_display"
-  echo
 
-  echo "$result" | jq '{
+  jq -n \
+    --arg public_ip "$public_ip" \
+    --arg server_name "$raw_server_name" \
+    --arg location "$raw_server_location" \
+    --arg ping_latency "$ping_latency" \
+    --arg download_speed "$download_speed" \
+    --arg upload_speed "$upload_speed" '{
       speed_tests_found: 1,
       servers: [
         {
-          public_ip: (.client.ip // "unknown"),
-          test_server: (.server.name // "unknown"),
-          location: (.server.location // .server.country // ""),
-          ping_ms: (.ping // null),
-          download_mbps: (if .download then (.download / 1000000) else null end),
-          upload_mbps: (if .upload then (.upload / 1000000) else null end),
-          timestamp: (.timestamp // "")
+          public_ip: $public_ip,
+          test_server: $server_name,
+          location: $location,
+          ping_ms: (if $ping_latency == "unavailable" then null else ($ping_latency | tonumber) end),
+          download_mbps: (if $download_speed == "unavailable" then null else ($download_speed | tonumber) end),
+          upload_mbps: (if $upload_speed == "unavailable" then null else ($upload_speed | tonumber) end),
+          timestamp: ""
         }
       ]
     }' > "$(task_output_path 2)"
@@ -1706,8 +2037,7 @@ gateway_details() {
 
   nmap -p- --open -T4 "$gateway_ip" -oG - > "$gateway_scan_file" 2>/dev/null &
   local gateway_scan_pid=$!
-  spinner
-  wait_for_pid "$gateway_scan_pid" "Gateway port scan failed for $gateway_ip." || {
+  monitor_nmap_progress "$gateway_scan_pid" "$gateway_scan_file" 120 "ports" "Open Ports:" "Gateway port scan failed for $gateway_ip." || {
     rm -f "$gateway_scan_file"
     return 1
   }
@@ -1735,13 +2065,6 @@ gateway_details() {
     }
   ' "$gateway_scan_file")
   rm -f "$gateway_scan_file"
-
-  echo "Open Ports:"
-  if [[ "${#ports[@]}" -eq 0 ]]; then
-    echo "none found"
-  else
-    printf '%s\n' "${ports[@]}"
-  fi
 
   jq -n \
     --arg gateway_ip "$gateway_ip" \
@@ -1779,8 +2102,7 @@ custom_target_port_scan() {
   raw_file="$(multi_entry_raw_prefix_for_index 10 "$entry_index")-nmap.grep"
   nmap -p- --open -T4 "$target_ip" -oG - > "$scan_file" 2>/dev/null &
   local scan_pid=$!
-  spinner
-  wait_for_pid "$scan_pid" "Custom target port scan failed for $target_ip." || {
+  monitor_nmap_progress "$scan_pid" "$scan_file" 120 "ports" "Open Ports:" "Custom target port scan failed for $target_ip." || {
     rm -f "$scan_file"
     return 1
   }
@@ -1808,13 +2130,6 @@ custom_target_port_scan() {
     }
   ' "$scan_file")
   rm -f "$scan_file"
-
-  echo "Open Ports:"
-  if [[ "${#ports[@]}" -eq 0 ]]; then
-    echo "none found"
-  else
-    printf '%s\n' "${ports[@]}"
-  fi
 
   json_file="$(multi_entry_output_path_for_index 10 "$entry_index")"
   jq -n \
@@ -1954,6 +2269,225 @@ build_identity_summary() {
     network-device) echo "Likely network infrastructure device" ;;
     *) echo "Unknown device identity" ;;
   esac
+}
+
+parse_dig_status() {
+  local file="$1"
+  awk '
+    /status:/ {
+      if (match($0, /status: [A-Z]+/)) {
+        value = substr($0, RSTART + 8, RLENGTH - 8)
+        print value
+        exit
+      }
+    }
+  ' "$file"
+}
+
+parse_dig_flags() {
+  local file="$1"
+  awk '
+    /flags:/ {
+      line = $0
+      sub(/^.*flags:[[:space:]]*/, "", line)
+      sub(/;.*$/, "", line)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      print line
+      exit
+    }
+  ' "$file"
+}
+
+parse_dig_short_answers() {
+  local file="$1"
+  awk '
+    BEGIN { in_answer=0 }
+    /^;; ANSWER SECTION:/ { in_answer=1; next }
+    /^;; / && in_answer { in_answer=0 }
+    in_answer && NF >= 5 {
+      print $NF
+    }
+  ' "$file"
+}
+
+custom_target_dns_assessment() {
+  local target_ip
+  local hostname
+  local json_file
+  local raw_prefix
+  local entry_index
+  local query_tool=""
+  local udp_file
+  local tcp_file
+  local ptr_file
+  local version_file
+  local udp_status="unknown"
+  local tcp_status="unknown"
+  local ptr_status="unknown"
+  local recursion_available=false
+  local dns_service_working=false
+  local udp_answers_json="[]"
+  local tcp_answers_json="[]"
+  local ptr_answers_json="[]"
+  local version_response=""
+  local software_hint="unknown"
+
+  if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
+    echo
+    echo "Custom Target DNS Assessment"
+  fi
+
+  target_ip="$(prompt_for_target_ip "Target DNS IP Address: ")"
+  hostname="$(resolve_target_hostname "$target_ip")"
+  echo "Target IP: $target_ip"
+  echo "Hostname: $hostname"
+  echo
+
+  if command -v dig >/dev/null 2>&1; then
+    query_tool="dig"
+  elif command -v nslookup >/dev/null 2>&1; then
+    query_tool="nslookup"
+  else
+    echo "This function requires dig or nslookup."
+    return 1
+  fi
+
+  entry_index="$(next_multi_entry_index 14)"
+  raw_prefix="$(multi_entry_raw_prefix_for_index 14 "$entry_index")"
+
+  echo "Stage 1: Testing UDP DNS resolution..."
+  udp_file="$(mktemp)"
+  if [[ "$query_tool" == "dig" ]]; then
+    dig @"$target_ip" example.com A +time=3 +tries=1 > "$udp_file" 2>&1 || true
+  else
+    nslookup example.com "$target_ip" > "$udp_file" 2>&1 || true
+  fi
+  copy_raw_artifact "$udp_file" "${raw_prefix}-udp.txt"
+
+  echo "Stage 2: Testing TCP DNS resolution..."
+  tcp_file="$(mktemp)"
+  if [[ "$query_tool" == "dig" ]]; then
+    dig @"$target_ip" example.com A +tcp +time=3 +tries=1 > "$tcp_file" 2>&1 || true
+  else
+    printf 'TCP assessment requires dig; skipped with nslookup fallback.\n' > "$tcp_file"
+  fi
+  copy_raw_artifact "$tcp_file" "${raw_prefix}-tcp.txt"
+
+  echo "Stage 3: Testing reverse PTR lookup..."
+  ptr_file="$(mktemp)"
+  if [[ "$query_tool" == "dig" ]]; then
+    dig @"$target_ip" -x 8.8.8.8 +time=3 +tries=1 > "$ptr_file" 2>&1 || true
+  else
+    nslookup 8.8.8.8 "$target_ip" > "$ptr_file" 2>&1 || true
+  fi
+  copy_raw_artifact "$ptr_file" "${raw_prefix}-ptr.txt"
+
+  echo "Stage 4: Probing version.bind..."
+  version_file="$(mktemp)"
+  if [[ "$query_tool" == "dig" ]]; then
+    dig @"$target_ip" version.bind TXT CH +time=3 +tries=1 > "$version_file" 2>&1 || true
+  else
+    printf 'version.bind probe requires dig; skipped with nslookup fallback.\n' > "$version_file"
+  fi
+  copy_raw_artifact "$version_file" "${raw_prefix}-version-bind.txt"
+
+  if [[ "$query_tool" == "dig" ]]; then
+    udp_status="$(parse_dig_status "$udp_file")"
+    tcp_status="$(parse_dig_status "$tcp_file")"
+    ptr_status="$(parse_dig_status "$ptr_file")"
+    udp_answers_json="$(parse_dig_short_answers "$udp_file" | jq -R . | jq -s .)"
+    tcp_answers_json="$(parse_dig_short_answers "$tcp_file" | jq -R . | jq -s .)"
+    ptr_answers_json="$(parse_dig_short_answers "$ptr_file" | jq -R . | jq -s .)"
+
+    if parse_dig_flags "$udp_file" | grep -qw 'ra'; then
+      recursion_available=true
+    fi
+
+    version_response="$(awk '
+      BEGIN { in_answer=0 }
+      /^;; ANSWER SECTION:/ { in_answer=1; next }
+      /^;; / && in_answer { in_answer=0 }
+      in_answer && NF >= 5 {
+        print $NF
+        exit
+      }
+    ' "$version_file" | tr -d '"')"
+  else
+    if grep -qi 'Address:' "$udp_file" && grep -qi 'Name:' "$udp_file"; then
+      udp_status="NOERROR"
+      recursion_available=true
+      dns_service_working=true
+    fi
+    if grep -qi 'Address:' "$ptr_file" || grep -qi 'name =' "$ptr_file"; then
+      ptr_status="NOERROR"
+    fi
+  fi
+
+  [[ -z "$udp_status" ]] && udp_status="unknown"
+  [[ -z "$tcp_status" ]] && tcp_status="unknown"
+  [[ -z "$ptr_status" ]] && ptr_status="unknown"
+  [[ -z "$version_response" ]] || software_hint="$version_response"
+
+  if [[ "$dns_service_working" == "false" ]]; then
+    if [[ "$udp_status" == "NOERROR" && "$(jq 'length' <<< "$udp_answers_json")" -gt 0 ]]; then
+      dns_service_working=true
+    fi
+  fi
+
+  echo "DNS Service Working: $dns_service_working"
+  echo "Recursion Available: $recursion_available"
+  echo "UDP Query Status: $udp_status"
+  echo "TCP Query Status: $tcp_status"
+  echo "PTR Query Status: $ptr_status"
+  echo "Software Hint: ${software_hint:-unknown}"
+  echo "Upstream Destination Inference: unknown"
+  echo "Note: Client-side DNS answers cannot reliably reveal where this resolver forwards upstream traffic. That requires packet capture on the DNS host, firewall, or gateway."
+
+  json_file="$(multi_entry_output_path_for_index 14 "$entry_index")"
+  jq -n \
+    --arg target_ip "$target_ip" \
+    --arg hostname "$hostname" \
+    --arg query_tool "$query_tool" \
+    --arg udp_status "$udp_status" \
+    --arg tcp_status "$tcp_status" \
+    --arg ptr_status "$ptr_status" \
+    --arg version_response "$version_response" \
+    --arg software_hint "$software_hint" \
+    --arg upstream_destination_inference "unknown" \
+    --arg upstream_visibility_note "Client-side DNS answers cannot reliably reveal where this resolver forwards upstream traffic. Capture on the resolver host, gateway, or firewall is required." \
+    --argjson dns_service_working "$dns_service_working" \
+    --argjson recursion_available "$recursion_available" \
+    --argjson udp_answers "$udp_answers_json" \
+    --argjson tcp_answers "$tcp_answers_json" \
+    --argjson ptr_answers "$ptr_answers_json" \
+    '{
+      target_ip: $target_ip,
+      hostname: $hostname,
+      query_tool: $query_tool,
+      dns_service_working: $dns_service_working,
+      recursion_available: $recursion_available,
+      udp_query: {
+        status: $udp_status,
+        answers: $udp_answers
+      },
+      tcp_query: {
+        status: $tcp_status,
+        answers: $tcp_answers
+      },
+      reverse_ptr_query: {
+        status: $ptr_status,
+        answers: $ptr_answers
+      },
+      version_bind_response: (if $version_response == "" then null else $version_response end),
+      software_hint: $software_hint,
+      upstream_destination_inference: $upstream_destination_inference,
+      upstream_visibility_note: $upstream_visibility_note
+    }' > "$json_file"
+
+  validate_json_file "$json_file"
+  echo "Saved JSON: $json_file"
+
+  rm -f "$udp_file" "$tcp_file" "$ptr_file" "$version_file"
 }
 
 custom_target_identity_scan() {
@@ -2917,8 +3451,7 @@ dhcp_network_scan() {
     dhcp_scan_file="$(mktemp)"
     nmap -p- --open "$server" -oG - > "$dhcp_scan_file" 2>/dev/null &
     local dhcp_scan_pid=$!
-    spinner
-    wait_for_pid "$dhcp_scan_pid" "DHCP server port scan failed for $server." || {
+    monitor_nmap_progress "$dhcp_scan_pid" "$dhcp_scan_file" 120 "ports" "Open Ports:" "DHCP server port scan failed for $server." || {
       rm -f "$dhcp_scan_file"
       return 1
     }
@@ -2944,13 +3477,6 @@ dhcp_network_scan() {
       }
     ' "$dhcp_scan_file")
     rm -f "$dhcp_scan_file"
-
-    echo "Open Ports Of Server $((idx + 1)) ($server):"
-    if [[ "${#open_ports[@]}" -eq 0 ]]; then
-      echo "none found"
-    else
-      printf '%s\n' "${open_ports[@]}"
-    fi
 
     offer_count="$(printf '%s\n' "${raw_server_ids[@]}" | awk -v target="$server" '$0 == target {count++} END {print count+0}')"
     classification="$(classify_dhcp_server "$server" "$gateway_ip" "${open_ports[@]}")"
@@ -3171,6 +3697,45 @@ render_custom_target_identity_report() {
   jq -r '.services[]? | "- \(.port) | \(.state) | \(.service) | \((.version // "") | if . == "" then "no version banner" else . end)"' "$file" >> "$report_file"
 }
 
+render_custom_target_dns_assessment_report() {
+  local file="$1"
+  local report_file="$2"
+  local target_ip hostname query_tool dns_service_working recursion_available
+  local udp_status tcp_status ptr_status software_hint upstream_inference upstream_note
+
+  target_ip="$(jq -r '.target_ip // "unknown"' "$file" 2>/dev/null)"
+  hostname="$(jq -r '.hostname // "unknown"' "$file" 2>/dev/null)"
+  query_tool="$(jq -r '.query_tool // "unknown"' "$file" 2>/dev/null)"
+  dns_service_working="$(jq -r '.dns_service_working // false' "$file" 2>/dev/null)"
+  recursion_available="$(jq -r '.recursion_available // false' "$file" 2>/dev/null)"
+  udp_status="$(jq -r '.udp_query.status // "unknown"' "$file" 2>/dev/null)"
+  tcp_status="$(jq -r '.tcp_query.status // "unknown"' "$file" 2>/dev/null)"
+  ptr_status="$(jq -r '.reverse_ptr_query.status // "unknown"' "$file" 2>/dev/null)"
+  software_hint="$(jq -r '.software_hint // "unknown"' "$file" 2>/dev/null)"
+  upstream_inference="$(jq -r '.upstream_destination_inference // "unknown"' "$file" 2>/dev/null)"
+  upstream_note="$(jq -r '.upstream_visibility_note // empty' "$file" 2>/dev/null)"
+
+  {
+    echo "Target IP: ${target_ip}"
+    echo "Hostname: ${hostname}"
+    echo "Query Tool: ${query_tool}"
+    echo "DNS Service Working: ${dns_service_working}"
+    echo "Recursion Available: ${recursion_available}"
+    echo "UDP Query Status: ${udp_status}"
+    echo "TCP Query Status: ${tcp_status}"
+    echo "PTR Query Status: ${ptr_status}"
+    echo "Software Hint: ${software_hint}"
+    echo "Upstream Destination Inference: ${upstream_inference}"
+    if [[ -n "$upstream_note" ]]; then
+      echo "Note: ${upstream_note}"
+    fi
+  } >> "$report_file"
+
+  jq -r '"UDP Answers: " + ((.udp_query.answers // []) | if length > 0 then join(", ") else "none found" end)' "$file" >> "$report_file"
+  jq -r '"TCP Answers: " + ((.tcp_query.answers // []) | if length > 0 then join(", ") else "none found" end)' "$file" >> "$report_file"
+  jq -r '"PTR Answers: " + ((.reverse_ptr_query.answers // []) | if length > 0 then join(", ") else "none found" end)' "$file" >> "$report_file"
+}
+
 render_dhcp_report() {
   local file="$1"
   local report_file="$2"
@@ -3269,6 +3834,7 @@ run_task_by_id() {
     10) custom_target_port_scan ;;
     11) custom_target_stress_test ;;
     13) custom_target_identity_scan ;;
+    14) custom_target_dns_assessment ;;
     *) return 1 ;;
   esac
 }
@@ -3409,6 +3975,7 @@ detect_os() {
 parse_args "$@"
 detect_os
 initialize_debug_logging
+clear_screen_if_supported
 check_tools
 mkdir -p "$OUTPUT_DIR"
 warn_if_not_root

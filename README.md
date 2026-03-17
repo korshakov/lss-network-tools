@@ -42,6 +42,8 @@ After selecting a network interface, the tool provides these scan functions:
    Prompts for an IP address and runs the same high-impact ICMP stress workflow against that specific target.
 13. **Custom Target Identity Scan**  
    Prompts for an IP address and combines MAC/vendor discovery, optional online vendor enrichment, hostname lookup, and conservative service fingerprinting into a single device identity profile with `device_type_hint`, `confidence`, and `identity_summary`.
+14. **Custom Target DNS Assessment**  
+   Prompts for an IP address and tests whether the target is a working DNS resolver over UDP and TCP, whether recursion is available, whether reverse lookups work, and whether the service exposes a software hint such as `dnsmasq`.
 
 Additional menu options:
 
@@ -67,6 +69,7 @@ High-impact warning:
 - **Raw evidence capture** under `raw/` for scan source output such as `nmap`, `speedtest-cli`, DHCP discovery, and stress-test ping stages.
 - **Hostname enrichment** for custom target scans when reverse DNS is available.
 - **Append-style custom target results** so repeated runs of `10`, `11`, and `13` on the same day become `device-1`, `device-2`, and so on instead of overwriting previous results.
+- **DNS behavior assessment** for custom DNS targets, including UDP/TCP query checks, recursion visibility, reverse lookup checks, and `version.bind` probing when supported.
 - **DHCP evidence capture** with unique responders, raw offer counts, and optional relay/proxy source visibility when `tcpdump` is available.
 - **Per-run debug log** captured as `debug.txt` in the run folder for troubleshooting.
 - **Optional `--debug` mode** that disables spinner redraws and keeps the session log much easier to troubleshoot.
@@ -138,6 +141,7 @@ Possible files inside a run folder:
 - `custom-target-port-scan-device-<n>.json`
 - `custom-target-stress-test-device-<n>.json`
 - `custom-target-identity-scan-device-<n>.json`
+- `custom-target-dns-assessment-device-<n>.json`
 - `manifest.json`
 - `debug.txt`
 - `lss-network-tools-report-<client>-<location>-DD-MM-YYYY-HH-MM.txt`
@@ -167,9 +171,18 @@ The custom identity scan includes:
 - Human-readable identity summary
 - Discovered services and version banners
 
+The custom DNS assessment includes:
+
+- Whether the DNS service actually answers queries
+- Whether recursion appears to be available
+- UDP and TCP DNS query status
+- Reverse PTR lookup behavior
+- `version.bind` software hints when exposed
+- An explicit note that upstream forwarding destinations cannot be reliably inferred from client-side answers alone
+
 ## Notes
 
 - Scans use `nmap`; runtime depends on network size and host responsiveness.
 - `000)` can take a long time in larger networks.
 - If `speedtest-cli` is unavailable or fails, other scan functions still work independently.
-- Custom target functions `10`, `11`, and `13` are manual-only and are not included in `000)`.
+- Custom target functions `10`, `11`, `13`, and `14` are manual-only and are not included in `000)`.
