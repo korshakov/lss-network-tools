@@ -187,6 +187,7 @@ EOF
 
 write_wrapper() {
   log "Creating command wrapper at $WRAPPER_PATH"
+  mkdir -p "$(dirname "$WRAPPER_PATH")"
 
   cat > "$WRAPPER_PATH" <<EOF
 #!/usr/bin/env bash
