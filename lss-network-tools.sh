@@ -129,6 +129,8 @@ initialize_debug_logging() {
     return
   fi
 
+  find "$OUTPUT_DIR" -maxdepth 1 -type f -name '.debug-session-*.txt' -delete 2>/dev/null || true
+
   if [[ -t 1 ]]; then
     OUTPUT_IS_TTY=1
   fi
@@ -621,6 +623,10 @@ finalize_run() {
 
   if [[ -n "$RUN_OUTPUT_DIR" ]]; then
     write_manifest_for_current_run || true
+  fi
+
+  if [[ -n "$SESSION_DEBUG_LOG" && -f "$SESSION_DEBUG_LOG" ]]; then
+    rm -f "$SESSION_DEBUG_LOG" 2>/dev/null || true
   fi
 }
 
