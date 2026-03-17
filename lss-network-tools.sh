@@ -455,7 +455,7 @@ build_report_for_current_run() {
   local timestamp
   local ran_summary=""
   local missing_summary=""
-  local func_id title file_name file_path
+  local func_id title file_name file_path description
   local task_files=()
   local entry_index
   local report_interface
@@ -477,8 +477,10 @@ build_report_for_current_run() {
     return 1
   fi
 
-  RUN_REPORT_TIME_STAMP="$(date '+%H-%M')"
-  RUN_REPORT_FILE="$RUN_OUTPUT_DIR/lss-network-tools-report-${RUN_CLIENT_SLUG}-${RUN_LOCATION_SLUG}-${RUN_DATE_STAMP}-${RUN_REPORT_TIME_STAMP}.txt"
+  if [[ -z "$RUN_REPORT_FILE" || "$RUN_REPORT_FILE" == "$RUN_OUTPUT_DIR/"* ]]; then
+    RUN_REPORT_TIME_STAMP="$(date '+%H-%M')"
+    RUN_REPORT_FILE="$RUN_OUTPUT_DIR/lss-network-tools-report-${RUN_CLIENT_SLUG}-${RUN_LOCATION_SLUG}-${RUN_DATE_STAMP}-${RUN_REPORT_TIME_STAMP}.txt"
+  fi
   report_file="$RUN_REPORT_FILE"
   timestamp="$(date '+%d-%m-%Y %H:%M')"
 
@@ -543,16 +545,18 @@ build_report_for_current_run() {
       continue
     fi
 
-    entry_index=0
+      entry_index=0
     for file_path in "${task_files[@]}"; do
       entry_index=$((entry_index + 1))
+      description="$(task_description "$func_id")"
       {
         echo "================================================"
         if task_supports_multiple_entries "$func_id"; then
-          echo "Function $func_id) $title - Device $entry_index"
+          echo "$func_id: $title - Device $entry_index"
         else
-          echo "Function $func_id) $title"
+          echo "$func_id: $title"
         fi
+        echo "Description: $description"
         echo "================================================"
       } >> "$report_file"
 
@@ -577,8 +581,233 @@ build_report_for_current_run() {
   done
 
   append_findings_summary "$report_file"
+  append_remediation_hints "$report_file"
 
   echo "Report built successfully: $report_file"
+}
+
+list_reportable_run_dirs() {
+  local dir
+
+  find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -type d | while IFS= read -r dir; do
+    if find "$dir" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null | grep -q .; then
+      echo "$dir"
+    fi
+  done | while IFS= read -r dir; do
+    printf '%s\t%s\n' "$(stat -f '%m' "$dir" 2>/dev/null || stat -c '%Y' "$dir" 2>/dev/null || echo 0)" "$dir"
+  done | sort -rn | awk -F'\t' '{print $2}'
+}
+
+default_report_export_dir() {
+  if [[ -d "$HOME/Desktop" ]]; then
+    echo "$HOME/Desktop"
+  else
+    echo "$HOME"
+  fi
+}
+
+load_run_metadata_from_dir() {
+  local run_dir="$1"
+  local manifest_file="$run_dir/manifest.json"
+
+  if json_file_usable "$manifest_file"; then
+    RUN_LOCATION="$(jq -r '.location // "Unknown"' "$manifest_file" 2>/dev/null)"
+    RUN_CLIENT_NAME="$(jq -r '.client // "Unknown"' "$manifest_file" 2>/dev/null)"
+    SELECTED_INTERFACE="$(jq -r '.selected_interface // "unknown"' "$manifest_file" 2>/dev/null)"
+  else
+    RUN_LOCATION="Unknown"
+    RUN_CLIENT_NAME="Unknown"
+  fi
+
+  RUN_LOCATION_SLUG="$(sanitize_for_filename "$RUN_LOCATION")"
+  RUN_CLIENT_SLUG="$(sanitize_for_filename "$RUN_CLIENT_NAME")"
+  RUN_DATE_STAMP="$(date '+%d-%m-%Y')"
+}
+
+build_report_from_previous_run() {
+  local run_dirs=()
+  local run_dir=""
+  local idx=1
+  local choice=""
+  local export_choice=""
+  local export_dir=""
+  local report_name=""
+  local previous_output_dir="${RUN_OUTPUT_DIR:-}"
+  local previous_report_file="${RUN_REPORT_FILE:-}"
+  local previous_debug_log="${RUN_DEBUG_LOG:-}"
+  local previous_manifest_file="${RUN_MANIFEST_FILE:-}"
+  local previous_location="${RUN_LOCATION:-}"
+  local previous_client="${RUN_CLIENT_NAME:-}"
+  local previous_location_slug="${RUN_LOCATION_SLUG:-}"
+  local previous_client_slug="${RUN_CLIENT_SLUG:-}"
+  local previous_date_stamp="${RUN_DATE_STAMP:-}"
+  local previous_selected_interface="${SELECTED_INTERFACE:-}"
+
+  while IFS= read -r run_dir; do
+    [[ -n "$run_dir" ]] && run_dirs+=("$run_dir")
+  done < <(list_reportable_run_dirs)
+
+  if [[ "${#run_dirs[@]}" -eq 0 ]]; then
+    echo "No previous runs with usable JSON outputs were found in $OUTPUT_DIR."
+    return 0
+  fi
+
+  echo
+  echo "Build Report From Previous Run"
+  echo "=============================="
+  echo
+  for run_dir in "${run_dirs[@]}"; do
+    echo "$idx) $(basename "$run_dir")"
+    idx=$((idx + 1))
+  done
+  echo "0) Exit"
+  echo
+
+  read -r -p "Choose previous run: " choice
+  if [[ "$choice" == "0" ]]; then
+    return 0
+  fi
+  if [[ ! "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#run_dirs[@]} )); then
+    echo "Invalid selection. Returning to main menu."
+    return 1
+  fi
+
+  run_dir="${run_dirs[$((choice - 1))]}"
+  export_dir="$(default_report_export_dir)"
+  report_name="lss-network-tools-report-$(basename "$run_dir")-$(date '+%H-%M').txt"
+
+  echo
+  echo "Report $report_name will be saved to $export_dir."
+  echo "Would you like it somewhere else?"
+  echo "1) Yes"
+  echo "2) No"
+  echo "3) Do nothing and exit"
+  echo
+  read -r -p "Choose option: " export_choice
+
+  case "$export_choice" in
+    1)
+      read -r -p "New directory: " export_dir
+      if [[ -z "$export_dir" ]]; then
+        echo "No directory provided. Returning to main menu."
+        return 1
+      fi
+      mkdir -p "$export_dir" 2>/dev/null || {
+        echo "Unable to create or access directory: $export_dir"
+        return 1
+      }
+      ;;
+    2)
+      mkdir -p "$export_dir" 2>/dev/null || true
+      ;;
+    3)
+      return 0
+      ;;
+    *)
+      echo "Invalid selection. Returning to main menu."
+      return 1
+      ;;
+  esac
+
+  RUN_OUTPUT_DIR="$run_dir"
+  RUN_DEBUG_LOG="$run_dir/debug.txt"
+  RUN_MANIFEST_FILE="$run_dir/manifest.json"
+  load_run_metadata_from_dir "$run_dir"
+  RUN_REPORT_FILE="$export_dir/$report_name"
+
+  if ! build_report_for_current_run; then
+    RUN_OUTPUT_DIR="$previous_output_dir"
+    RUN_REPORT_FILE="$previous_report_file"
+    RUN_DEBUG_LOG="$previous_debug_log"
+    RUN_MANIFEST_FILE="$previous_manifest_file"
+    RUN_LOCATION="$previous_location"
+    RUN_CLIENT_NAME="$previous_client"
+    RUN_LOCATION_SLUG="$previous_location_slug"
+    RUN_CLIENT_SLUG="$previous_client_slug"
+    RUN_DATE_STAMP="$previous_date_stamp"
+    SELECTED_INTERFACE="$previous_selected_interface"
+    return 1
+  fi
+
+  RUN_OUTPUT_DIR="$previous_output_dir"
+  RUN_REPORT_FILE="$previous_report_file"
+  RUN_DEBUG_LOG="$previous_debug_log"
+  RUN_MANIFEST_FILE="$previous_manifest_file"
+  RUN_LOCATION="$previous_location"
+  RUN_CLIENT_NAME="$previous_client"
+  RUN_LOCATION_SLUG="$previous_location_slug"
+  RUN_CLIENT_SLUG="$previous_client_slug"
+  RUN_DATE_STAMP="$previous_date_stamp"
+  SELECTED_INTERFACE="$previous_selected_interface"
+}
+
+delete_all_previous_runs() {
+  local confirmation=""
+  local run_count=0
+
+  run_count="$(find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -type d | wc -l | awk '{print $1}')"
+  if [[ "$run_count" -eq 0 ]]; then
+    echo "No previous runs were found in $OUTPUT_DIR."
+    return 0
+  fi
+
+  echo
+  echo "Delete All Previous Runs"
+  echo "========================"
+  echo "This will permanently remove all run folders under:"
+  echo "$OUTPUT_DIR"
+  echo
+  read -r -p "Type DELETE to continue: " confirmation
+
+  if [[ "$confirmation" != "DELETE" ]]; then
+    echo "Deletion cancelled."
+    return 0
+  fi
+
+  find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
+  find "$OUTPUT_DIR" -maxdepth 1 -type f -name '.debug-session-*.txt' -delete 2>/dev/null || true
+  echo "All previous runs have been deleted."
+}
+
+startup_menu() {
+  local choice=""
+  local yellow='\033[1;33m'
+  local reset='\033[0m'
+
+  while true; do
+    clear_screen_if_supported
+    printf "${yellow}LSS Network Tools${reset}\n"
+    printf "${yellow}=================${reset}\n"
+    echo
+    echo "1) Run LSS Network Tools"
+    echo "2) Build LSS Network Tools Report From Previous Run"
+    echo "3) Delete All Previous Runs"
+    echo "4) Exit"
+    echo
+
+    read -r -p "Choose option: " choice
+
+    case "$choice" in
+      1) return 0 ;;
+      2)
+        clear_screen_if_supported
+        build_report_from_previous_run
+        echo
+        read -r -p "Press Enter to return to the startup menu..." _
+        ;;
+      3)
+        clear_screen_if_supported
+        delete_all_previous_runs
+        echo
+        read -r -p "Press Enter to return to the startup menu..." _
+        ;;
+      4) exit 0 ;;
+      *)
+        echo "Invalid selection. Try again."
+        sleep 1
+        ;;
+    esac
+  done
 }
 
 append_findings_summary() {
@@ -702,6 +931,52 @@ append_findings_summary() {
       echo "No notable findings were generated from the current scan set."
     else
       jq -r '.findings[] | "- [" + (.severity | ascii_upcase) + "] " + .title + " - " + .detail' "$findings_file"
+    fi
+    echo
+  } >> "$report_file"
+}
+
+append_remediation_hints() {
+  local report_file="$1"
+  local findings_file="$RUN_OUTPUT_DIR/findings.json"
+  local remediation_json="[]"
+
+  if ! json_file_usable "$findings_file"; then
+    return 0
+  fi
+
+  if jq -e '.findings[]? | select(.source == "gateway-scan.json" and (.title | test("Gateway exposes"; "i")))' "$findings_file" >/dev/null 2>&1; then
+    remediation_json="$(append_finding_record "$remediation_json" "advice" "Review gateway exposure" "Check whether all exposed gateway services are expected on the LAN side. Pay particular attention to management interfaces and monitoring ports." "gateway-scan.json")"
+  fi
+
+  if jq -e '.findings[]? | select(.source == "gateway-stress-test.json")' "$findings_file" >/dev/null 2>&1; then
+    remediation_json="$(append_finding_record "$remediation_json" "advice" "Investigate gateway resilience" "Review firewall CPU load, IDS/IPS, traffic shaping, NIC offload settings, and hardware age if the stress profile showed packet loss, high jitter, or degraded recovery." "gateway-stress-test.json")"
+  fi
+
+  if jq -e '.findings[]? | select(.source == "dhcp-scan.json" and (.title | test("rogue DHCP|No DHCP responders"; "i")))' "$findings_file" >/dev/null 2>&1; then
+    remediation_json="$(append_finding_record "$remediation_json" "advice" "Verify DHCP behavior" "Check switch VLAN assignment, DHCP relay or helper configuration, and whether the observed DHCP responders match the client’s expected infrastructure." "dhcp-scan.json")"
+  fi
+
+  if jq -e '.findings[]? | select(.source == "dns-scan.json" or (.title | test("DNS resolver"; "i")))' "$findings_file" >/dev/null 2>&1; then
+    remediation_json="$(append_finding_record "$remediation_json" "advice" "Review DNS roles" "Confirm whether the detected DNS-capable hosts are expected to serve DNS, and inspect their forwarding or recursion configuration if they appear unusual." "dns")"
+  fi
+
+  if jq -e '.findings[]? | select(.source == "ldap-ad-scan.json")' "$findings_file" >/dev/null 2>&1; then
+    remediation_json="$(append_finding_record "$remediation_json" "advice" "Validate directory expectations" "If Active Directory services are expected on this site, confirm the selected subnet and check whether LDAP, Kerberos, or Global Catalog ports are being filtered or hosted elsewhere." "ldap-ad-scan.json")"
+  fi
+
+  if jq -e '.findings[]? | select(.source == "print-server-scan.json")' "$findings_file" >/dev/null 2>&1; then
+    remediation_json="$(append_finding_record "$remediation_json" "advice" "Validate print infrastructure expectations" "If printers or print servers are expected, verify that they are on the same subnet and that ports 515, 631, or 9100 are not filtered." "print-server-scan.json")"
+  fi
+
+  {
+    echo "================================================"
+    echo "Remediation Hints"
+    echo "================================================"
+    if [[ "$(jq -r 'length' <<< "$remediation_json" 2>/dev/null)" == "0" ]]; then
+      echo "No remediation hints were generated from the current findings."
+    else
+      jq -r '.[] | "- " + .title + " - " + .detail' <<< "$remediation_json"
     fi
     echo
   } >> "$report_file"
@@ -4927,6 +5202,26 @@ task_output_file() {
   task_field "$task_id" 3
 }
 
+task_description() {
+  case "$1" in
+    1) echo "Collects IPv4 interface details, subnet, gateway, and MAC address for the selected interface." ;;
+    2) echo "Runs an internet speed test and records public IP, test server, latency, and throughput." ;;
+    3) echo "Detects the default gateway for the selected interface and scans it for open TCP ports." ;;
+    4) echo "Performs repeated DHCP discovery attempts and inspects observed responders for ports and role hints." ;;
+    5) echo "Scans the local subnet for hosts exposing DNS-related ports." ;;
+    6) echo "Scans the local subnet for LDAP and Active Directory related services." ;;
+    7) echo "Scans the local subnet for SMB, NFS, and related file-sharing services." ;;
+    8) echo "Scans the local subnet for printer and print-server related ports." ;;
+    9) echo "Runs a high-impact latency and packet-loss stress profile against the detected local gateway." ;;
+    10) echo "Runs a full TCP port scan against a manually specified target IP." ;;
+    11) echo "Runs a high-impact latency and packet-loss stress profile against a manually specified target IP." ;;
+    13) echo "Combines MAC, vendor, hostname, and service fingerprint data to infer the identity of a target host." ;;
+    14) echo "Tests whether a target IP is operating as a DNS resolver and records its query behavior." ;;
+    000) echo "Runs the full core audit across functions 1 to 9." ;;
+    *) echo "No description available." ;;
+  esac
+}
+
 run_task_exists() {
   local func_id="$1"
   for listed_id in $(get_task_ids); do
@@ -5091,11 +5386,12 @@ detect_os() {
 
 parse_args "$@"
 detect_os
-initialize_debug_logging
 clear_screen_if_supported
 check_tools
 mkdir -p "$OUTPUT_DIR"
 warn_if_not_root
+startup_menu
+initialize_debug_logging
 select_interface
 initialize_run_context
 trap finalize_run EXIT
