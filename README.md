@@ -72,7 +72,8 @@ Startup menu utilities:
 - `1)` **Run LSS Network Tools**
 - `2)` **Build LSS Network Tools Report From Previous Run**
 - `3)` **Delete All Previous Runs**
-- `4)` Exit
+- `4)` **Check For Updates**
+- `5)` Exit
 
 High-impact warning:
 - `9)`, `11)`, and `000)` require typing `PROCEED` before a stress test runs.
@@ -100,6 +101,7 @@ High-impact warning:
 - **Optional `--debug` mode** that disables spinner redraws and keeps the session log much easier to troubleshoot.
 - **Automatic report build on exit** into the same run folder as the JSON results.
 - **Previous-run report rebuild** that can export a fresh TXT report to Desktop or another chosen directory without creating a new scan run.
+- **Installed-mode update check** that compares the current version against the latest GitHub tag, creates a backup zip first, and then replaces app files while preserving data.
 ## Supported platforms
 
 - macOS
@@ -150,6 +152,14 @@ To print the installed version without launching the app:
 ```bash
 lss-network-tools --version
 ```
+
+To check for updates after install:
+
+- Open `lss-network-tools`
+- Choose `4) Check For Updates`
+- Enter a backup destination directory when prompted
+- Confirm the update
+- Relaunch the command after the updater exits
 
 To remove the installed application later:
 

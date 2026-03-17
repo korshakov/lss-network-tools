@@ -4,7 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.7"
+APP_VERSION="v1.0.8"
+APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
 TMP_ROOT="$SCRIPT_DIR/tmp"
@@ -255,6 +256,260 @@ create_backup_zip() {
 
   rm -rf "$staging_dir"
   echo "$backup_destination/$backup_name"
+}
+
+github_api_headers() {
+  local token="${GITHUB_TOKEN:-}"
+
+  if [[ -z "$token" ]] && command -v gh >/dev/null 2>&1; then
+    token="$(gh auth token 2>/dev/null || true)"
+  fi
+
+  if [[ -n "$token" ]]; then
+    printf 'Authorization: Bearer %s\n' "$token"
+  fi
+  printf 'Accept: application/vnd.github+json\n'
+  printf 'User-Agent: %s\n' "$APP_NAME"
+}
+
+prompt_for_github_token() {
+  local token=""
+  local choice=""
+
+  echo
+  echo "Authentication may be required for this repository."
+  read -r -p "Would you like to enter a GitHub token with read access now? (y/N): " choice
+  if [[ ! "$choice" =~ ^[Yy]$ ]]; then
+    return 1
+  fi
+
+  read -r -s -p "GitHub Token: " token
+  echo
+
+  if [[ -z "$token" ]]; then
+    return 1
+  fi
+
+  GITHUB_TOKEN="$token"
+  export GITHUB_TOKEN
+  return 0
+}
+
+print_private_repo_auth_hint() {
+  echo "Authentication may be required to access update metadata or downloads."
+  echo "For private repositories, use a GitHub token with read access or authenticate GitHub CLI if available."
+}
+
+latest_remote_tag_from_github() {
+  local api_url="https://api.github.com/repos/${APP_GITHUB_REPO}/tags?per_page=100"
+  local response=""
+  local -a curl_args=(curl -fsSL)
+  local header
+
+  while IFS= read -r header; do
+    [[ -n "$header" ]] && curl_args+=(-H "$header")
+  done < <(github_api_headers)
+
+  if ! response="$("${curl_args[@]}" "$api_url" 2>/dev/null)"; then
+    return 1
+  fi
+
+  jq -r '.[].name' <<< "$response" 2>/dev/null | sort -V | tail -n 1
+}
+
+download_tag_zipball() {
+  local tag="$1"
+  local destination="$2"
+  local zip_url="https://api.github.com/repos/${APP_GITHUB_REPO}/zipball/refs/tags/${tag}"
+  local -a curl_args=(curl -fL)
+  local header
+
+  while IFS= read -r header; do
+    [[ -n "$header" ]] && curl_args+=(-H "$header")
+  done < <(github_api_headers)
+
+  curl_args+=(-o "$destination" "$zip_url")
+  "${curl_args[@]}"
+}
+
+extract_update_archive() {
+  local archive_file="$1"
+  local destination_dir="$2"
+
+  mkdir -p "$destination_dir"
+
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -q "$archive_file" -d "$destination_dir"
+    return 0
+  fi
+
+  if command -v bsdtar >/dev/null 2>&1; then
+    bsdtar -xf "$archive_file" -C "$destination_dir"
+    return 0
+  fi
+
+  echo "ZIP extraction requires unzip or bsdtar."
+  return 1
+}
+
+perform_installed_update() {
+  local remote_tag="$1"
+  local archive_file=""
+  local extract_dir=""
+  local source_root=""
+  local helper_script=""
+  local confirmation=""
+  local backup_dir=""
+  local backup_file=""
+  local preserve_find_args=()
+  local script_path=""
+
+  if ! is_installed_mode; then
+    echo "Updates are only supported from an installed deployment."
+    return 1
+  fi
+
+  echo "Current Version: ${APP_VERSION}"
+  echo "Latest Available Tag: ${remote_tag}"
+  echo
+  read -r -p "Enter backup destination directory before update (leave blank to cancel): " backup_dir
+  if [[ -z "$backup_dir" ]]; then
+    echo "Update cancelled."
+    return 0
+  fi
+
+  case "$backup_dir" in
+    "$APP_ROOT"|"$APP_ROOT"/*|"$DATA_ROOT"|"$DATA_ROOT"/*)
+      echo "Backup destination cannot be inside the installed application or data directories."
+      return 1
+      ;;
+  esac
+
+  backup_file="$(create_backup_zip "$backup_dir")" || return 1
+  echo "Backup created: $backup_file"
+  echo
+
+  read -r -p "Type UPDATE to download and install ${remote_tag}, or CANCEL to return to the startup menu: " confirmation
+  if [[ "$confirmation" != "UPDATE" ]]; then
+    echo "Update cancelled."
+    return 0
+  fi
+
+  archive_file="$(mktemp "/tmp/${APP_NAME}-update-XXXXXX.zip")"
+  extract_dir="$(mktemp -d "/tmp/${APP_NAME}-update-XXXXXX")"
+
+  if ! download_tag_zipball "$remote_tag" "$archive_file"; then
+    echo "Failed to download update archive for ${remote_tag}."
+    print_private_repo_auth_hint
+    if prompt_for_github_token && download_tag_zipball "$remote_tag" "$archive_file"; then
+      :
+    else
+      rm -f "$archive_file"
+      rm -rf "$extract_dir"
+      return 1
+    fi
+  fi
+
+  if ! extract_update_archive "$archive_file" "$extract_dir"; then
+    rm -f "$archive_file"
+    rm -rf "$extract_dir"
+    return 1
+  fi
+
+  source_root="$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+  if [[ -z "$source_root" || ! -d "$source_root" ]]; then
+    echo "Failed to locate the extracted update payload."
+    rm -f "$archive_file"
+    rm -rf "$extract_dir"
+    return 1
+  fi
+
+  helper_script="$(mktemp "/tmp/${APP_NAME}-apply-update-XXXXXX.sh")"
+  script_path="$APP_ROOT/$(basename "$BASH_SOURCE")"
+
+  if [[ "$OS" == "macos" ]]; then
+    preserve_find_args=(
+      ! -name output
+      ! -name raw
+      ! -name tmp
+      ! -name install.env
+    )
+  else
+    preserve_find_args=(
+      ! -name install.env
+    )
+  fi
+
+  cat > "$helper_script" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+SOURCE_ROOT="$source_root"
+DEST_DIR="$APP_ROOT"
+ARCHIVE_FILE="$archive_file"
+EXTRACT_DIR="$extract_dir"
+HELPER_SCRIPT="$helper_script"
+SCRIPT_PATH="$script_path"
+
+find "\$DEST_DIR" -mindepth 1 -maxdepth 1 ${preserve_find_args[*]} -exec rm -rf {} +
+cp -R "\$SOURCE_ROOT"/. "\$DEST_DIR"/
+chmod +x "\$DEST_DIR"/*.sh 2>/dev/null || true
+rm -f "\$ARCHIVE_FILE"
+rm -rf "\$EXTRACT_DIR"
+rm -f "\$HELPER_SCRIPT"
+echo
+echo "Update applied successfully."
+echo "Installed Version: $remote_tag"
+echo "Please relaunch ${APP_NAME}."
+EOF
+  chmod +x "$helper_script"
+
+  echo
+  echo "Applying update and exiting current session..."
+  exec bash "$helper_script"
+}
+
+check_for_updates() {
+  local remote_tag=""
+
+  echo
+  echo "Check For Updates"
+  echo "================="
+  echo
+
+  if ! is_installed_mode; then
+    echo "Updates are only supported from an installed deployment."
+    return 1
+  fi
+
+  echo "Current Version: $APP_VERSION"
+  echo
+  echo "Checking remote tags..."
+
+  remote_tag="$(latest_remote_tag_from_github || true)"
+  if [[ -z "$remote_tag" ]]; then
+    echo "Unable to read remote tags for ${APP_GITHUB_REPO}."
+    print_private_repo_auth_hint
+    if prompt_for_github_token; then
+      remote_tag="$(latest_remote_tag_from_github || true)"
+    fi
+  fi
+
+  if [[ -z "$remote_tag" ]]; then
+    echo "Update check failed."
+    return 1
+  fi
+
+  echo "Latest Available Tag: $remote_tag"
+
+  if [[ "$remote_tag" == "$APP_VERSION" ]]; then
+    echo
+    echo "This installation is already up to date."
+    return 0
+  fi
+
+  echo
+  echo "An update is available."
+  perform_installed_update "$remote_tag"
 }
 
 uninstall_installed_application() {
@@ -960,7 +1215,8 @@ startup_menu() {
     echo "1) Run LSS Network Tools"
     echo "2) Build LSS Network Tools Report From Previous Run"
     echo "3) Delete All Previous Runs"
-    echo "4) Exit"
+    echo "4) Check For Updates"
+    echo "5) Exit"
     echo
 
     read -r -p "Choose option: " choice
@@ -979,7 +1235,13 @@ startup_menu() {
         echo
         read -r -p "Press Enter to return to the startup menu..." _
         ;;
-      4) exit 0 ;;
+      4)
+        clear_screen_if_supported
+        check_for_updates
+        echo
+        read -r -p "Press Enter to return to the startup menu..." _
+        ;;
+      5) exit 0 ;;
       *)
         echo "Invalid selection. Try again."
         sleep 1
