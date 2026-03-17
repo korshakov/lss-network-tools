@@ -11,9 +11,22 @@ DATA_TARGET_DIR="${LSS_INSTALL_DATA_DIR:-}"
 WRAPPER_PATH="${LSS_INSTALL_WRAPPER_PATH:-/usr/local/bin/${APP_NAME}}"
 BREW_USER=""
 BREW_BIN=""
+AUDIT_LOG_PATH=""
 
 log() {
   echo "[install] $*"
+}
+
+append_install_audit_log() {
+  local action="$1"
+  local status="$2"
+  local detail="$3"
+  local timestamp=""
+
+  [[ -z "$AUDIT_LOG_PATH" ]] && return 0
+  mkdir -p "$(dirname "$AUDIT_LOG_PATH")"
+  timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+  printf '%s | %s | %s | %s\n' "$timestamp" "$action" "$status" "$detail" >> "$AUDIT_LOG_PATH"
 }
 
 fail() {
@@ -27,11 +40,13 @@ detect_os() {
       OS="macos"
       APP_TARGET_DIR="${APP_TARGET_DIR:-/usr/local/share/${APP_NAME}}"
       DATA_TARGET_DIR="${DATA_TARGET_DIR:-$APP_TARGET_DIR}"
+      AUDIT_LOG_PATH="${DATA_TARGET_DIR}/install-audit.log"
       ;;
     Linux)
       OS="linux"
       APP_TARGET_DIR="${APP_TARGET_DIR:-/usr/local/lib/${APP_NAME}}"
       DATA_TARGET_DIR="${DATA_TARGET_DIR:-/var/lib/${APP_NAME}}"
+      AUDIT_LOG_PATH="${DATA_TARGET_DIR}/install-audit.log"
       ;;
     *)
       fail "Unsupported platform: $(uname -s)"
@@ -242,6 +257,7 @@ print_install_summary() {
   log "Uninstall later with: sudo ${APP_NAME} --uninstall"
   log "If command completion does not work immediately, open a new shell."
   log "For zsh, you can also run: rehash && autoload -Uz compinit && compinit"
+  append_install_audit_log "install" "success" "Application deployed to ${APP_TARGET_DIR}"
 }
 
 detect_os

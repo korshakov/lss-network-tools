@@ -204,6 +204,31 @@ current_raw_output_dir() {
   printf '%s/raw\n' "$(current_output_dir)"
 }
 
+current_audit_log_path() {
+  printf '%s/install-audit.log\n' "$DATA_ROOT"
+}
+
+append_audit_log() {
+  local action="$1"
+  local status="$2"
+  local detail="$3"
+  local audit_log=""
+  local timestamp=""
+
+  audit_log="$(current_audit_log_path)"
+  mkdir -p "$(dirname "$audit_log")"
+  timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+  printf '%s | %s | %s | %s\n' "$timestamp" "$action" "$status" "$detail" >> "$audit_log"
+}
+
+version_matches() {
+  local expected="$1"
+  local reported=""
+
+  reported="$(bash "$SCRIPT_DIR/$(basename "$BASH_SOURCE")" --version 2>/dev/null || true)"
+  [[ "$reported" == "$APP_NAME $expected" ]]
+}
+
 initialize_debug_logging() {
   if [[ -n "$SESSION_DEBUG_LOG" ]]; then
     return
@@ -222,6 +247,121 @@ initialize_debug_logging() {
 
 is_installed_mode() {
   [[ "$INSTALL_MODE" == "installed" ]]
+}
+
+display_system_info() {
+  echo
+  echo "About / System Info"
+  echo "==================="
+  echo
+  echo "Application: $APP_NAME"
+  echo "Version: $APP_VERSION"
+  echo "OS: $OS"
+  echo "Install Mode: $INSTALL_MODE"
+  echo "Script Path: $SCRIPT_DIR"
+  echo "App Root: $APP_ROOT"
+  echo "Data Root: $DATA_ROOT"
+  echo "Wrapper Path: $(installed_wrapper_path)"
+  echo "Output Root: $OUTPUT_DIR"
+  echo "Temp Root: $TMP_ROOT"
+  echo "User: $(id -un 2>/dev/null || echo unknown)"
+  echo "Effective UID: $EUID"
+}
+
+check_install_health() {
+  local red='\033[0;31m'
+  local green='\033[0;32m'
+  local yellow='\033[1;33m'
+  local reset='\033[0m'
+  local issues=0
+  local path
+  local wrapper_path
+  local tool
+  local tools_to_check=()
+
+  echo
+  echo "Check Install Health"
+  echo "===================="
+  echo
+
+  wrapper_path="$(installed_wrapper_path)"
+
+  if is_installed_mode; then
+    printf "${green}[OK]${reset} Installed mode detected\n"
+  else
+    printf "${yellow}[WARN]${reset} Installed mode not detected; running from a portable/source path\n"
+    issues=$((issues + 1))
+  fi
+
+  for path in "$APP_ROOT" "$OUTPUT_DIR" "$TMP_ROOT"; do
+    if [[ -e "$path" ]]; then
+      printf "${green}[OK]${reset} %s\n" "$path"
+    else
+      printf "${red}[MISSING]${reset} %s\n" "$path"
+      issues=$((issues + 1))
+    fi
+  done
+
+  if [[ "$OS" == "linux" ]]; then
+    for path in "$DATA_ROOT" "$DATA_ROOT/raw" "$DATA_ROOT/install-audit.log"; do
+      if [[ -e "$path" ]]; then
+        printf "${green}[OK]${reset} %s\n" "$path"
+      else
+        if [[ "$path" == "$DATA_ROOT/install-audit.log" ]]; then
+          printf "${yellow}[WARN]${reset} %s (will appear after install/update/uninstall logging)\n" "$path"
+        else
+          printf "${red}[MISSING]${reset} %s\n" "$path"
+          issues=$((issues + 1))
+        fi
+      fi
+    done
+  else
+    for path in "$DATA_ROOT/raw" "$DATA_ROOT/install-audit.log"; do
+      if [[ -e "$path" ]]; then
+        printf "${green}[OK]${reset} %s\n" "$path"
+      else
+        if [[ "$path" == "$DATA_ROOT/install-audit.log" ]]; then
+          printf "${yellow}[WARN]${reset} %s (will appear after install/update/uninstall logging)\n" "$path"
+        else
+          printf "${red}[MISSING]${reset} %s\n" "$path"
+          issues=$((issues + 1))
+        fi
+      fi
+    done
+  fi
+
+  if [[ -x "$wrapper_path" ]]; then
+    printf "${green}[OK]${reset} %s\n" "$wrapper_path"
+  else
+    printf "${red}[MISSING]${reset} %s\n" "$wrapper_path"
+    issues=$((issues + 1))
+  fi
+
+  tools_to_check=(nmap jq speedtest-cli tcpdump)
+  if [[ "$OS" == "macos" ]]; then
+    tools_to_check+=(ipconfig ifconfig route networksetup ping)
+  else
+    tools_to_check+=(ip ping)
+  fi
+
+  echo
+  echo "Dependency Health"
+  echo "-----------------"
+  for tool in "${tools_to_check[@]}"; do
+    if command -v "$tool" >/dev/null 2>&1; then
+      printf "${green}[OK]${reset} %s\n" "$tool"
+    else
+      printf "${red}[MISSING]${reset} %s\n" "$tool"
+      issues=$((issues + 1))
+    fi
+  done
+
+  echo
+  if [[ "$issues" -eq 0 ]]; then
+    echo "Install health looks good."
+  else
+    echo "Install health found $issues issue(s)."
+  fi
 }
 
 installed_wrapper_path() {
@@ -469,10 +609,25 @@ ARCHIVE_FILE="$archive_file"
 EXTRACT_DIR="$extract_dir"
 HELPER_SCRIPT="$helper_script"
 SCRIPT_PATH="$script_path"
+AUDIT_LOG_PATH="$(current_audit_log_path)"
 
 find "\$DEST_DIR" -mindepth 1 -maxdepth 1 ${preserve_find_args[*]} -exec rm -rf {} +
 cp -R "\$SOURCE_ROOT"/. "\$DEST_DIR"/
 chmod +x "\$DEST_DIR"/*.sh 2>/dev/null || true
+REPORTED_VERSION="\$(bash "\$SCRIPT_PATH" --version 2>/dev/null || true)"
+mkdir -p "\$(dirname "\$AUDIT_LOG_PATH")"
+if [[ "\$REPORTED_VERSION" != "${APP_NAME} $remote_tag" ]]; then
+  printf '%s | %s | %s | %s\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "update" "failed" "Expected ${APP_NAME} $remote_tag but saw \$REPORTED_VERSION" >> "\$AUDIT_LOG_PATH"
+  echo
+  echo "Update verification failed."
+  echo "Expected version: ${APP_NAME} $remote_tag"
+  echo "Reported version: \$REPORTED_VERSION"
+  rm -f "\$ARCHIVE_FILE"
+  rm -rf "\$EXTRACT_DIR"
+  rm -f "\$HELPER_SCRIPT"
+  exit 1
+fi
+printf '%s | %s | %s | %s\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "update" "success" "Installed version ${remote_tag}" >> "\$AUDIT_LOG_PATH"
 rm -f "\$ARCHIVE_FILE"
 rm -rf "\$EXTRACT_DIR"
 rm -f "\$HELPER_SCRIPT"
@@ -602,6 +757,7 @@ uninstall_installed_application() {
     return 0
   fi
 
+  append_audit_log "uninstall" "success" "Installed application removal started"
   rm -f "$wrapper_path"
   rm -rf "$APP_ROOT"
   if [[ "$OS" == "linux" ]]; then
@@ -1238,7 +1394,9 @@ startup_menu() {
     echo "2) Build LSS Network Tools Report From Previous Run"
     echo "3) Delete All Previous Runs"
     echo "4) Check For Updates"
-    echo "5) Exit"
+    echo "5) About / System Info"
+    echo "6) Check Install Health"
+    echo "7) Exit"
     echo
 
     read -r -p "Choose option: " choice
@@ -1263,7 +1421,19 @@ startup_menu() {
         echo
         read -r -p "Press Enter to return to the startup menu..." _
         ;;
-      5) exit 0 ;;
+      5)
+        clear_screen_if_supported
+        display_system_info
+        echo
+        read -r -p "Press Enter to return to the startup menu..." _
+        ;;
+      6)
+        clear_screen_if_supported
+        check_install_health
+        echo
+        read -r -p "Press Enter to return to the startup menu..." _
+        ;;
+      7) exit 0 ;;
       *)
         echo "Invalid selection. Try again."
         sleep 1

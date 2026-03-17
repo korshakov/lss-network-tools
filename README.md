@@ -73,7 +73,9 @@ Startup menu utilities:
 - `2)` **Build LSS Network Tools Report From Previous Run**
 - `3)` **Delete All Previous Runs**
 - `4)` **Check For Updates**
-- `5)` Exit
+- `5)` **About / System Info**
+- `6)` **Check Install Health**
+- `7)` Exit
 
 High-impact warning:
 - `9)`, `11)`, and `000)` require typing `PROCEED` before a stress test runs.
@@ -84,6 +86,7 @@ High-impact warning:
 
 - **Dependency checklist at startup** with optional auto-install via `install.sh` when required tools are missing.
 - **Startup utility menu** for running scans, rebuilding reports from previous runs, and deleting stored runs.
+- **Support utilities** for viewing installed paths/version and checking install health quickly.
 - **Interactive interface selector** (on macOS, includes hardware port descriptions when available).
 - **Run context prompt** for location and client name after interface selection.
 - **Timestamped run folder per session** under the installed data root, so prior runs stay intact.
@@ -102,6 +105,7 @@ High-impact warning:
 - **Automatic report build on exit** into the same run folder as the JSON results.
 - **Previous-run report rebuild** that can export a fresh TXT report to Desktop or another chosen directory without creating a new scan run.
 - **Installed-mode update check** that compares the current version against the latest GitHub tag, creates a backup zip first, and then replaces app files while preserving data.
+- **Install/update audit logging** in `install-audit.log` under the installed data root.
 ## Supported platforms
 
 - macOS
@@ -232,6 +236,13 @@ The manifest includes:
 - Task list with expected JSON outputs
 - Artifact inventory for JSON, report, debug, and raw evidence files
 
+The install audit log includes:
+
+- install events
+- update events
+- uninstall events
+- update verification failures when relevant
+
 The custom identity scan includes:
 
 - Target IP and hostname
@@ -259,3 +270,13 @@ The custom DNS assessment includes:
 - If `speedtest-cli` is unavailable or fails, other scan functions still work independently.
 - Custom target functions `10`, `11`, `13`, and `14` are manual-only and are not included in `000)`.
 - `Build LSS Network Tools Report From Previous Run` uses saved JSON data from an existing run folder and does not create a new scan run.
+
+## Maintainer release checklist
+
+Before publishing a new release:
+
+1. Update `APP_VERSION` in `lss-network-tools.sh`
+2. Commit the version bump
+3. Push the commit to GitHub
+4. Create and publish the matching tag/release
+5. Sanity-check the published source by confirming the tag contains the expected `APP_VERSION`
