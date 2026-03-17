@@ -154,11 +154,20 @@ To print the installed version without launching the app:
 lss-network-tools --version
 ```
 
+If command completion does not work immediately after install or update, open a new shell.
+For `zsh`, you can also run:
+
+```bash
+rehash
+autoload -Uz compinit && compinit
+```
+
 To check for updates after install:
 
 - Open `lss-network-tools`
 - Choose `4) Check For Updates`
-- Enter a backup destination directory when prompted
+- Choose whether to create a backup first
+- If you choose backup, enter a backup destination directory
 - Confirm the update
 - Relaunch the command after the updater exits
 

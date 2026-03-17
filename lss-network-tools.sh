@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.10"
+APP_VERSION="v1.0.11"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -359,6 +359,7 @@ perform_installed_update() {
   local source_root=""
   local helper_script=""
   local confirmation=""
+  local backup_choice=""
   local backup_dir=""
   local backup_file=""
   local preserve_find_args=()
@@ -372,22 +373,41 @@ perform_installed_update() {
   echo "Current Version: ${APP_VERSION}"
   echo "Latest Available Tag: ${remote_tag}"
   echo
-  read -r -p "Enter backup destination directory before update (leave blank to cancel): " backup_dir
-  if [[ -z "$backup_dir" ]]; then
-    echo "Update cancelled."
-    return 0
-  fi
+  echo "Backup data before update?"
+  echo "1) Yes"
+  echo "2) No"
+  echo "3) Cancel"
+  echo
+  read -r -p "Choose option: " backup_choice
 
-  case "$backup_dir" in
-    "$APP_ROOT"|"$APP_ROOT"/*|"$DATA_ROOT"|"$DATA_ROOT"/*)
-      echo "Backup destination cannot be inside the installed application or data directories."
+  case "$backup_choice" in
+    1)
+      read -r -p "Enter backup destination directory: " backup_dir
+      if [[ -z "$backup_dir" ]]; then
+        echo "Update cancelled because no backup destination was provided."
+        return 1
+      fi
+      case "$backup_dir" in
+        "$APP_ROOT"|"$APP_ROOT"/*|"$DATA_ROOT"|"$DATA_ROOT"/*)
+          echo "Backup destination cannot be inside the installed application or data directories."
+          return 1
+          ;;
+      esac
+      backup_file="$(create_backup_zip "$backup_dir")" || return 1
+      echo "Backup created: $backup_file"
+      echo
+      ;;
+    2)
+      ;;
+    3)
+      echo "Update cancelled."
+      return 0
+      ;;
+    *)
+      echo "Update cancelled."
       return 1
       ;;
   esac
-
-  backup_file="$(create_backup_zip "$backup_dir")" || return 1
-  echo "Backup created: $backup_file"
-  echo
 
   read -r -p "Type UPDATE to download and install ${remote_tag}, or CANCEL to return to the startup menu: " confirmation
   if [[ "$confirmation" != "UPDATE" ]]; then
@@ -460,6 +480,8 @@ echo
 echo "Update applied successfully."
 echo "Installed Version: $remote_tag"
 echo "Please relaunch ${APP_NAME}."
+echo "If command completion does not work immediately, open a new shell."
+echo "For zsh, you can also run: rehash && autoload -Uz compinit && compinit"
 EOF
   chmod +x "$helper_script"
 

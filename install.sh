@@ -240,6 +240,8 @@ print_install_summary() {
 
   log "Run: sudo ${APP_NAME}"
   log "Uninstall later with: sudo ${APP_NAME} --uninstall"
+  log "If command completion does not work immediately, open a new shell."
+  log "For zsh, you can also run: rehash && autoload -Uz compinit && compinit"
 }
 
 detect_os
