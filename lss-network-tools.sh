@@ -823,11 +823,11 @@ select_interface() {
   local choice
   local display_label
   local status_suffix
+  local red='\033[0;31m'
   local green='\033[0;32m'
   local yellow='\033[1;33m'
   local reset='\033[0m'
   local has_ipv4=false
-  local section_printed=false
 
   while IFS= read -r iface; do
     interfaces+=("$iface")
@@ -858,13 +858,17 @@ select_interface() {
     echo
     if [[ "${#ipv4_interfaces[@]}" -gt 0 ]]; then
       echo "Active Interfaces:"
+    else
+      printf "${red}WARNING: No IPv4 address was detected on any interface.${reset}\n"
+      echo "Possible causes include a disconnected cable, Wi-Fi not being connected, no DHCP offer being received, or an interface that is not configured."
+      echo
+      echo "Other Interfaces:"
     fi
     idx=1
     for iface in "${ordered_interfaces[@]}"; do
       display_label="$iface"
       status_suffix=""
       has_ipv4=false
-      section_printed=false
 
       if [[ "$OS" == "macos" ]]; then
         local description
