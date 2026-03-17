@@ -6,9 +6,24 @@ The tool is designed for interactive onsite diagnostics: run a daily audit for t
 
 ## Quick start
 
+Preferred install method:
+
 ```bash
 git clone https://github.com/lssolutions-ie/lss-network-tools.git
 cd lss-network-tools
+chmod +x *.sh
+./install.sh
+./lss-network-tools.sh
+```
+
+Alternative install method:
+
+1. Download the latest release ZIP from GitHub.
+2. Extract it.
+3. Open Terminal in the extracted `lss-network-tools` folder.
+4. Run:
+
+```bash
 chmod +x *.sh
 ./install.sh
 ./lss-network-tools.sh
@@ -102,10 +117,12 @@ Run from repo root:
 `install.sh` will:
 
 - Detect OS (macOS/Linux)
+- On macOS, expect to run `install.sh` as your normal user. Homebrew may ask for your password during installation, but you should not run the whole installer with `sudo` just for that.
 - Install Homebrew if missing on supported non-root setups
 - Install required dependencies (for example: `nmap`, `jq`, `speedtest-cli`, `ping`, `tcpdump`, and platform-specific networking tools)
 - Create `output/` if needed
 - Ensure `lss-network-tools.sh` is executable
+- If the extracted ZIP folder name looks like `lss-network-tools-<version>`, it will try to normalize it back to `lss-network-tools` when safe to do so
 
 ## Running
 
@@ -127,6 +144,7 @@ For cleaner troubleshooting output without spinner redraws:
 > For Git clones, it compares the local repository tag with the latest remote tag and can update with `git fetch` and `git pull`.
 > For ZIP/manual installs, it compares the built-in app version with the latest remote tag and can download and replace the installation in place while preserving `output/`.
 > For private repositories, Git or GitHub authentication may be required.
+> On macOS, `install.sh` should normally be run as your regular user, while `lss-network-tools.sh` may still be run with elevated privileges when needed for certain scans.
 
 ## Output
 
