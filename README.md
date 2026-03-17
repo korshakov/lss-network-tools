@@ -84,7 +84,7 @@ High-impact warning:
 - **Optional `--debug` mode** that disables spinner redraws and keeps the session log much easier to troubleshoot.
 - **Automatic report build on exit** into the same run folder as the JSON results.
 - **Previous-run report rebuild** that can export a fresh TXT report to Desktop or another chosen directory without creating a new scan run.
-- **Tag-based update check** that compares the local version with the latest remote Git tag and can pull updates after confirmation.
+- **Tag-based update check** that supports both Git clones and ZIP/manual installs.
 
 ## Supported platforms
 
@@ -123,7 +123,10 @@ For cleaner troubleshooting output without spinner redraws:
 > If `tcpdump` is installed and the tool is running as root, DHCP scan output will also record relay or proxy packet sources to help explain duplicate offers.
 > If `curl` is available, Function `13` can also use an online MAC vendor lookup fallback when local vendor detection is incomplete.
 > Stress tests are intentionally high-impact. If the target is a client gateway or firewall, consider disconnecting it from internet or running it after-hours if disruption would be unacceptable.
-> `Check For Updates` works best in a normal Git clone with a configured `origin` remote. For private repositories, Git authentication may be required.
+> `Check For Updates` supports both normal Git clones and ZIP/manual installs.
+> For Git clones, it compares the local repository tag with the latest remote tag and can update with `git fetch` and `git pull`.
+> For ZIP/manual installs, it compares the built-in app version with the latest remote tag and can download and replace the installation in place while preserving `output/`.
+> For private repositories, Git or GitHub authentication may be required.
 
 ## Output
 
@@ -201,4 +204,5 @@ The custom DNS assessment includes:
 - If `speedtest-cli` is unavailable or fails, other scan functions still work independently.
 - Custom target functions `10`, `11`, `13`, and `14` are manual-only and are not included in `000)`.
 - `Build LSS Network Tools Report From Previous Run` uses saved JSON data from an existing run folder and does not create a new scan run.
-- `Check For Updates` compares local and remote Git tags. If no remote tags exist yet, it will report that no published versions are available.
+- `Check For Updates` uses tags as the source of truth for published versions.
+- For ZIP/manual installs, keep the `APP_VERSION` value in the script aligned with the tag you publish.

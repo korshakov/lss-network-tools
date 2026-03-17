@@ -3,6 +3,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_VERSION="v1.0.0"
+APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 OUTPUT_DIR="$SCRIPT_DIR/output"
 RUN_OUTPUT_DIR=""
 RUN_DATE_STAMP=""
@@ -781,6 +783,176 @@ remote_origin_url() {
   git remote get-url origin 2>/dev/null || true
 }
 
+github_api_headers() {
+  local token="${GITHUB_TOKEN:-}"
+
+  if [[ -z "$token" ]] && command -v gh >/dev/null 2>&1; then
+    token="$(gh auth token 2>/dev/null || true)"
+  fi
+
+  if [[ -n "$token" ]]; then
+    printf 'Authorization: Bearer %s\n' "$token"
+    printf 'Accept: application/vnd.github+json\n'
+  fi
+}
+
+prompt_for_github_token() {
+  local token=""
+  echo
+  echo "Authentication may be required for this repository."
+  read -r -p "Would you like to enter a GitHub token with read access now? (y/N): " choice
+  if [[ ! "$choice" =~ ^[Yy]$ ]]; then
+    return 1
+  fi
+  read -r -s -p "GitHub Token: " token
+  echo
+  if [[ -z "$token" ]]; then
+    return 1
+  fi
+  GITHUB_TOKEN="$token"
+  export GITHUB_TOKEN
+  return 0
+}
+
+latest_remote_tag_from_github() {
+  local api_url="https://api.github.com/repos/${APP_GITHUB_REPO}/tags?per_page=100"
+  local response=""
+  local -a curl_args=(curl -fsSL)
+  local header
+
+  while IFS= read -r header; do
+    [[ -n "$header" ]] && curl_args+=(-H "$header")
+  done < <(github_api_headers)
+
+  if ! response="$("${curl_args[@]}" "$api_url" 2>/dev/null)"; then
+    return 1
+  fi
+
+  jq -r '.[].name' <<< "$response" 2>/dev/null | sort -V | tail -n 1
+}
+
+download_tag_zipball() {
+  local tag="$1"
+  local destination="$2"
+  local zip_url="https://api.github.com/repos/${APP_GITHUB_REPO}/zipball/refs/tags/${tag}"
+  local -a curl_args=(curl -fL)
+  local header
+
+  while IFS= read -r header; do
+    [[ -n "$header" ]] && curl_args+=(-H "$header")
+  done < <(github_api_headers)
+
+  curl_args+=(-o "$destination" "$zip_url")
+  "${curl_args[@]}"
+}
+
+extract_update_archive() {
+  local archive_file="$1"
+  local destination_dir="$2"
+
+  mkdir -p "$destination_dir"
+
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -q "$archive_file" -d "$destination_dir"
+    return
+  fi
+
+  if command -v bsdtar >/dev/null 2>&1; then
+    bsdtar -xf "$archive_file" -C "$destination_dir"
+    return
+  fi
+
+  echo "ZIP extraction requires unzip or bsdtar."
+  return 1
+}
+
+perform_archive_update() {
+  local remote_tag="$1"
+  local current_version="$2"
+  local confirmation=""
+  local archive_file=""
+  local extract_dir=""
+  local source_root=""
+  local helper_script=""
+
+  echo "Current Version: ${current_version}"
+  echo "Latest Available Tag: ${remote_tag}"
+  echo
+  echo "An update is available for this ZIP/manual installation."
+  read -r -p "Type UPDATE to download and install ${remote_tag}, or CANCEL to return to the startup menu: " confirmation
+
+  if [[ "$confirmation" != "UPDATE" ]]; then
+    echo "Update cancelled."
+    return 0
+  fi
+
+  archive_file="$(mktemp "/tmp/lss-network-tools-update-XXXXXX.zip")"
+  extract_dir="$(mktemp -d "/tmp/lss-network-tools-update-XXXXXX")"
+
+  if ! download_tag_zipball "$remote_tag" "$archive_file"; then
+    echo "Failed to download update archive for ${remote_tag}."
+    if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+      print_private_repo_auth_hint "https://github.com/${APP_GITHUB_REPO}.git"
+      if prompt_for_github_token && download_tag_zipball "$remote_tag" "$archive_file"; then
+        :
+      else
+        rm -f "$archive_file"
+        rm -rf "$extract_dir"
+        return 1
+      fi
+    else
+      rm -f "$archive_file"
+      rm -rf "$extract_dir"
+      return 1
+    fi
+  fi
+
+  if ! extract_update_archive "$archive_file" "$extract_dir"; then
+    rm -f "$archive_file"
+    rm -rf "$extract_dir"
+    return 1
+  fi
+
+  source_root="$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+  if [[ -z "$source_root" || ! -d "$source_root" ]]; then
+    echo "Failed to locate the extracted update payload."
+    rm -f "$archive_file"
+    rm -rf "$extract_dir"
+    return 1
+  fi
+
+  helper_script="$(mktemp "/tmp/lss-network-tools-apply-update-XXXXXX.sh")"
+  cat > "$helper_script" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+SOURCE_ROOT="$source_root"
+DEST_DIR="$SCRIPT_DIR"
+ARCHIVE_FILE="$archive_file"
+EXTRACT_DIR="$extract_dir"
+HELPER_SCRIPT="$helper_script"
+
+cd "\$DEST_DIR"
+find "\$DEST_DIR" -mindepth 1 -maxdepth 1 \\
+  ! -name 'output' \\
+  ! -name '.git' \\
+  ! -name '.gitignore' \\
+  -exec rm -rf {} +
+cp -R "\$SOURCE_ROOT"/. "\$DEST_DIR"/
+chmod +x "\$DEST_DIR"/*.sh 2>/dev/null || true
+rm -f "\$ARCHIVE_FILE"
+rm -rf "\$EXTRACT_DIR"
+rm -f "\$HELPER_SCRIPT"
+echo
+echo "Update applied successfully."
+echo "Installed Version: $remote_tag"
+EOF
+  chmod +x "$helper_script"
+
+  echo
+  echo "The current session will now hand over to the updater and replace this installation in place."
+  exec bash "$helper_script"
+}
+
 print_private_repo_auth_hint() {
   local remote_url="$1"
 
@@ -803,6 +975,7 @@ check_for_updates() {
   local confirmation=""
   local run_installer=""
   local remote_url=""
+  local archive_mode=false
 
   echo
   echo "Check For Updates"
@@ -810,18 +983,39 @@ check_for_updates() {
   echo
 
   if ! command -v git >/dev/null 2>&1; then
-    echo "Git is required to check for updates."
-    return 1
+    archive_mode=true
   fi
 
-  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    echo "Updates require this tool to be run from a Git repository."
-    return 1
+  if [[ "$archive_mode" == "false" ]] && ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    archive_mode=true
   fi
 
-  if ! git remote get-url origin >/dev/null 2>&1; then
-    echo "No Git remote named origin is configured for this repository."
-    return 1
+  if [[ "$archive_mode" == "false" ]] && ! git remote get-url origin >/dev/null 2>&1; then
+    archive_mode=true
+  fi
+
+  if [[ "$archive_mode" == "true" ]]; then
+    echo "Installation Mode: ZIP/manual copy"
+    echo "Current Version: $APP_VERSION"
+    echo
+    echo "Checking remote tags..."
+    remote_tag="$(latest_remote_tag_from_github || true)"
+    if [[ -z "$remote_tag" ]]; then
+      echo "Unable to read remote tags for ${APP_GITHUB_REPO}."
+      print_private_repo_auth_hint "https://github.com/${APP_GITHUB_REPO}.git"
+      if prompt_for_github_token; then
+        remote_tag="$(latest_remote_tag_from_github || true)"
+      fi
+    fi
+    if [[ -z "$remote_tag" ]]; then
+      return 1
+    fi
+    if [[ "$remote_tag" == "$APP_VERSION" ]]; then
+      echo "This installation is already on the latest tagged version."
+      return 0
+    fi
+    perform_archive_update "$remote_tag" "$APP_VERSION"
+    return $?
   fi
 
   remote_url="$(remote_origin_url)"
