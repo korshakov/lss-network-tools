@@ -344,6 +344,44 @@ resolve_target_hostname() {
   fi
 }
 
+ip_in_cidr() {
+  local ip="$1"
+  local cidr="$2"
+  local network_ip prefix target_network
+
+  [[ -z "$ip" || -z "$cidr" ]] && return 1
+  network_ip="${cidr%/*}"
+  prefix="${cidr#*/}"
+  target_network="$(calculate_network "$ip" "$prefix" 2>/dev/null || true)"
+  [[ -n "$target_network" && "$target_network" == "$cidr" ]]
+}
+
+collect_custom_target_warnings() {
+  local target_ip="$1"
+  local iface="$2"
+  local warnings=()
+  local iface_details=""
+  local iface_ip=""
+  local gateway_ip=""
+  local network_cidr=""
+
+  iface_details="$(get_interface_details "$iface")"
+  IFS='|' read -r iface_ip _ _ _ gateway_ip <<< "$iface_details"
+  network_cidr="$(get_interface_network_cidr "$iface" 2>/dev/null || true)"
+
+  if [[ -n "$iface_ip" && "$target_ip" == "$iface_ip" ]]; then
+    warnings+=("The target IP matches the current machine on interface $iface.")
+  fi
+  if [[ -n "$gateway_ip" && "$target_ip" == "$gateway_ip" ]]; then
+    warnings+=("The target IP matches the current default gateway for interface $iface.")
+  fi
+  if [[ -n "$network_cidr" ]] && ! ip_in_cidr "$target_ip" "$network_cidr"; then
+    warnings+=("The target IP appears to be outside the selected interface subnet $network_cidr.")
+  fi
+
+  printf '%s\n' "${warnings[@]}"
+}
+
 lookup_mac_vendor_online() {
   local mac_address="$1"
   local vendor_name=""
@@ -1033,6 +1071,112 @@ interface_has_ipv4() {
   [[ -n "$ip" && -n "$mask" ]]
 }
 
+is_loopback_interface() {
+  local iface="$1"
+  [[ "$iface" == "lo0" || "$iface" == "lo" ]]
+}
+
+is_virtual_or_tunnel_interface() {
+  local iface="$1"
+  [[ "$iface" =~ ^(utun|gif|stf|awdl|llw|anpi|ap|vmenet|bridge|tun|tap|virbr|docker|br-) ]]
+}
+
+active_interface_summary() {
+  local iface=""
+  local details=""
+  local ip=""
+  local entries=()
+
+  while IFS= read -r iface; do
+    [[ -z "$iface" ]] && continue
+    details="$(get_interface_details "$iface")"
+    IFS='|' read -r ip _ _ _ _ <<< "$details"
+    if [[ -n "$ip" ]]; then
+      entries+=("$iface ($ip)")
+    fi
+  done < <(list_interfaces)
+
+  if [[ "${#entries[@]}" -gt 0 ]]; then
+    join_by ", " "${entries[@]}"
+  fi
+}
+
+print_interface_info_failure() {
+  local iface="$1"
+  local ip="$2"
+  local mask="$3"
+  local active_summary=""
+
+  echo "Error: Unable to collect complete IPv4 interface details for $iface."
+
+  if [[ -z "$ip" && -z "$mask" ]]; then
+    if is_loopback_interface "$iface"; then
+      echo "The selected interface is loopback-only and is not suitable for LAN scanning."
+    elif is_virtual_or_tunnel_interface "$iface"; then
+      echo "The selected interface appears to be a virtual, tunnel, or bridge-style interface without an IPv4 address."
+    else
+      echo "No IPv4 address and subnet mask were detected on this interface."
+    fi
+    echo "Possible causes include a disconnected cable, Wi-Fi not being connected, no DHCP offer being received, or the wrong interface being selected."
+  elif [[ -z "$ip" ]]; then
+    echo "A subnet mask was detected, but no IPv4 address was found on this interface."
+    echo "This can happen when the interface is down, waiting for DHCP, or only partially configured."
+  elif [[ -z "$mask" ]]; then
+    echo "An IPv4 address was detected ($ip), but the subnet mask could not be determined."
+    echo "This may be caused by unusual OS command output or a partially configured interface."
+  fi
+
+  active_summary="$(active_interface_summary)"
+  if [[ -n "$active_summary" ]]; then
+    echo "Try one of the active interfaces instead: $active_summary"
+  fi
+}
+
+write_interface_info_json() {
+  local status="$1"
+  local success="$2"
+  local error_code="$3"
+  local error_message="$4"
+  local iface="$5"
+  local ip="$6"
+  local mask="$7"
+  local network="$8"
+  local gateway="$9"
+  local mac="${10}"
+  shift 10
+  local warnings=("$@")
+  local warnings_json
+
+  warnings_json="$(printf '%s\n' "${warnings[@]}" | jq -R . | jq -s .)"
+
+  jq -n \
+    --arg status "$status" \
+    --argjson success "$success" \
+    --arg error_code "$error_code" \
+    --arg error_message "$error_message" \
+    --arg interface "$iface" \
+    --arg ip_address "$ip" \
+    --arg subnet "$mask" \
+    --arg network "$network" \
+    --arg gateway "$gateway" \
+    --arg mac_address "$mac" \
+    --argjson warnings "$warnings_json" \
+    '{
+      status: $status,
+      success: $success,
+      error: (if $error_code == "" and $error_message == "" then null else {code: $error_code, message: $error_message} end),
+      warnings: $warnings,
+      interface: $interface,
+      ip_address: (if $ip_address == "" then null else $ip_address end),
+      subnet: (if $subnet == "" then null else $subnet end),
+      network: (if $network == "" then null else $network end),
+      gateway: (if $gateway == "" then null else $gateway end),
+      mac_address: (if $mac_address == "" then null else $mac_address end)
+    }' > "$(task_output_path 1)"
+
+  validate_json_file "$(task_output_path 1)"
+}
+
 interface_info() {
   local iface="$1"
   local silent_mode="${2:-}"
@@ -1043,13 +1187,39 @@ interface_info() {
   local network=""
   local mac=""
   local gateway=""
+  local status="success"
+  local success="true"
+  local error_code=""
+  local error_message=""
+  local warnings=()
 
   details="$(get_interface_details "$iface")"
   IFS='|' read -r ip mask prefix mac gateway <<< "$details"
 
   if [[ -z "$ip" || -z "$mask" ]]; then
+    success="false"
+    status="failed"
+    if [[ -z "$ip" && -z "$mask" ]]; then
+      if is_loopback_interface "$iface"; then
+        error_code="loopback_interface_selected"
+        error_message="The selected interface is loopback-only and is not suitable for LAN scanning."
+      elif is_virtual_or_tunnel_interface "$iface"; then
+        error_code="no_ipv4_on_virtual_interface"
+        error_message="The selected interface appears to be a virtual, tunnel, or bridge-style interface without an IPv4 address."
+      else
+        error_code="no_ipv4_or_subnet_detected"
+        error_message="No IPv4 address or subnet mask was detected on the selected interface."
+      fi
+    elif [[ -z "$ip" ]]; then
+      error_code="ipv4_address_missing"
+      error_message="A subnet mask was detected, but no IPv4 address was found on the selected interface."
+    else
+      error_code="subnet_mask_missing"
+      error_message="An IPv4 address was detected, but the subnet mask could not be determined."
+    fi
+    write_interface_info_json "$status" "$success" "$error_code" "$error_message" "$iface" "$ip" "$mask" "" "$gateway" "$mac"
     if [[ "$silent_mode" != "silent" ]]; then
-      echo "Unable to determine IP or subnet for interface $iface"
+      print_interface_info_failure "$iface" "$ip" "$mask"
     fi
     return 1
   fi
@@ -1059,8 +1229,30 @@ interface_info() {
   fi
   network="$(calculate_network "$ip" "$prefix")"
 
+  if [[ -z "$network" ]]; then
+    success="false"
+    status="failed"
+    error_code="network_range_calculation_failed"
+    error_message="IPv4 details were found, but the network range could not be calculated."
+    write_interface_info_json "$status" "$success" "$error_code" "$error_message" "$iface" "$ip" "$mask" "" "$gateway" "$mac"
+    if [[ "$silent_mode" != "silent" ]]; then
+      echo "Error: IPv4 details were found for $iface, but the network range could not be calculated."
+      echo "IP Address: $ip"
+      echo "Subnet Mask: $mask"
+      echo "This may indicate malformed interface data or unexpected OS command output."
+    fi
+    return 1
+  fi
+
   if [[ -z "$gateway" ]]; then
     gateway=""
+    warnings+=("No default gateway was detected for this interface. Local subnet scans may still work, but internet-dependent tests may fail.")
+  fi
+  if [[ -z "$mac" ]]; then
+    warnings+=("The MAC address could not be read for this interface.")
+  fi
+  if [[ "${#warnings[@]}" -gt 0 ]]; then
+    status="completed_with_warnings"
   fi
 
   if [[ "$SHOW_FUNCTION_HEADER" -eq 1 && "$silent_mode" != "silent" ]]; then
@@ -1072,29 +1264,23 @@ interface_info() {
     echo "IP Address: $ip"
     echo "Subnet Mask: $mask"
     echo "Network Range: $network"
-    echo "Gateway: $gateway"
-    echo "MAC Address: $mac"
+    if [[ -n "$gateway" ]]; then
+      echo "Gateway: $gateway"
+    else
+      echo "Gateway: not detected"
+      echo "Warning: No default gateway was detected for $iface. Local subnet scans may still work, but internet-dependent tests may fail."
+    fi
+    if [[ -n "$mac" ]]; then
+      echo "MAC Address: $mac"
+    else
+      echo "MAC Address: not detected"
+      echo "Warning: The MAC address could not be read for $iface."
+    fi
   fi
 
   mkdir -p "$(current_output_dir)"
 
-  jq -n \
-    --arg interface "$iface" \
-    --arg ip_address "$ip" \
-    --arg subnet "$mask" \
-    --arg network "$network" \
-    --arg gateway "$gateway" \
-    --arg mac_address "$mac" \
-    '{
-      interface: $interface,
-      ip_address: $ip_address,
-      subnet: $subnet,
-      network: $network,
-      gateway: $gateway,
-      mac_address: $mac_address
-    }' > "$(task_output_path 1)"
-
-  validate_json_file "$(task_output_path 1)"
+  write_interface_info_json "$status" "$success" "$error_code" "$error_message" "$iface" "$ip" "$mask" "$network" "$gateway" "$mac" "${warnings[@]}"
 
   if [[ "$silent_mode" != "silent" ]]; then
     echo "Saved JSON: $(task_output_path 1)"
@@ -1322,6 +1508,12 @@ scan_servers_by_ports() {
   local json_file
   local raw_file
   local result_count=0
+  local status="success"
+  local success="true"
+  local error_code=""
+  local error_message=""
+  local warnings=()
+  local warnings_json
 
   if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
     echo
@@ -1331,7 +1523,18 @@ scan_servers_by_ports() {
 
   network="$(get_interface_network_cidr "$SELECTED_INTERFACE")"
   if [[ -z "$network" ]]; then
-    echo "Unable to determine network range for $SELECTED_INTERFACE"
+    echo "Error: Unable to determine the network range for $SELECTED_INTERFACE."
+    echo "Possible causes include no IPv4 address on the selected interface, a missing subnet mask, or selecting a bridge, tunnel, or otherwise non-routed interface."
+    jq -n \
+      --arg status "failed" \
+      --argjson success false \
+      --arg error_code "network_range_not_detected" \
+      --arg error_message "Unable to determine the network range for the selected interface." \
+      --arg network "" \
+      --arg scan_ports "$port_list" \
+      --argjson warnings '[]' \
+      '{status: $status, success: $success, error: {code: $error_code, message: $error_message}, warnings: $warnings, network: null, scan_ports: $scan_ports, servers: []}' > "$(current_output_dir)/$output_file"
+    validate_json_file "$(current_output_dir)/$output_file"
     return 1
   fi
 
@@ -1341,10 +1544,34 @@ scan_servers_by_ports() {
   echo "Stage 2: Scanning $description ports ($port_list)..."
 
   scan_file="$(mktemp)"
+  if [[ -z "$scan_file" || ! -f "$scan_file" ]]; then
+    echo "Error: Unable to create a temporary file for the $description scan."
+    jq -n \
+      --arg status "failed" \
+      --argjson success false \
+      --arg error_code "tempfile_creation_failed" \
+      --arg error_message "Unable to create a temporary file for the scan." \
+      --arg network "$network" \
+      --arg scan_ports "$port_list" \
+      --argjson warnings '[]' \
+      '{status: $status, success: $success, error: {code: $error_code, message: $error_message}, warnings: $warnings, network: $network, scan_ports: $scan_ports, servers: []}' > "$(current_output_dir)/$output_file"
+    validate_json_file "$(current_output_dir)/$output_file"
+    return 1
+  fi
   raw_file="$(current_raw_output_dir)/${output_file%.json}-nmap.grep"
   nmap -n -p "$port_list" --open "$network" -oG - > "$scan_file" 2>/dev/null &
   local scan_pid=$!
   monitor_nmap_progress "$scan_pid" "$scan_file" 300 "host_ports" "Matches Found:" "Port scan failed for network $network." || {
+    jq -n \
+      --arg status "failed" \
+      --argjson success false \
+      --arg error_code "network_port_scan_failed" \
+      --arg error_message "The network port scan did not complete successfully." \
+      --arg network "$network" \
+      --arg scan_ports "$port_list" \
+      --argjson warnings '[]' \
+      '{status: $status, success: $success, error: {code: $error_code, message: $error_message}, warnings: $warnings, network: $network, scan_ports: $scan_ports, servers: []}' > "$(current_output_dir)/$output_file"
+    validate_json_file "$(current_output_dir)/$output_file"
     rm -f "$scan_file"
     return 1
   }
@@ -1352,10 +1579,14 @@ scan_servers_by_ports() {
   copy_raw_artifact "$scan_file" "$raw_file"
 
   json_file="$(current_output_dir)/$output_file"
+  warnings_json='[]'
   jq -n \
+    --arg status "$status" \
+    --argjson success true \
+    --argjson warnings "$warnings_json" \
     --arg network "$network" \
     --arg scan_ports "$port_list" \
-    '{network: $network, scan_ports: $scan_ports, servers: []}' > "$json_file"
+    '{status: $status, success: $success, error: null, warnings: $warnings, network: $network, scan_ports: $scan_ports, servers: []}' > "$json_file"
 
   while IFS='|' read -r host_ip open_ports; do
     local ports_array=()
@@ -1426,6 +1657,25 @@ scan_servers_by_ports() {
   ' "$scan_file")
 
   rm -f "$scan_file"
+
+  if [[ "$result_count" -eq 0 ]]; then
+    warnings+=("The scan completed, but no matching hosts were found on the selected network range.")
+    status="completed_with_warnings"
+  fi
+
+  warnings_json="$(printf '%s\n' "${warnings[@]}" | jq -R . | jq -s .)"
+  jq \
+    --arg status "$status" \
+    --argjson success "$success" \
+    --argjson warnings "$warnings_json" \
+    '.status = $status
+     | .success = $success
+     | .warnings = $warnings' \
+    "$json_file" > "$json_file.tmp" || {
+      echo "Failed to finalize JSON output for $title."
+      return 1
+    }
+  mv "$json_file.tmp" "$json_file"
 
   echo "$title results found: $result_count"
   echo "Saved JSON: $json_file"
@@ -1865,6 +2115,13 @@ render_speed_test_report() {
   local file="$1"
   local report_file="$2"
   local server location download upload public_ip ping
+  local status success error_code error_message warning_count
+
+  status="$(jq -r '.status // "success"' "$file" 2>/dev/null)"
+  success="$(jq -r '.success // true' "$file" 2>/dev/null)"
+  error_code="$(jq -r '.error.code // empty' "$file" 2>/dev/null)"
+  error_message="$(jq -r '.error.message // empty' "$file" 2>/dev/null)"
+  warning_count="$(jq -r '(.warnings // []) | length' "$file" 2>/dev/null)"
 
   if jq -e '.servers and (.servers | type == "array") and (.servers | length > 0)' "$file" >/dev/null 2>&1; then
     public_ip="$(jq -r '.servers[0].public_ip // "unknown"' "$file" 2>/dev/null)"
@@ -1887,12 +2144,186 @@ render_speed_test_report() {
   fi
 
   {
+    echo "Status: ${status:-unknown}"
+    echo "Success: ${success:-false}"
+    if [[ -n "$error_code" ]]; then
+      echo "Error Code: $error_code"
+    fi
+    if [[ -n "$error_message" ]]; then
+      echo "Error Message: $error_message"
+    fi
+    if [[ -n "$warning_count" && "$warning_count" != "0" ]]; then
+      echo "Warnings: $warning_count"
+    fi
     echo "Public IP: ${public_ip:-unknown}"
     echo "Connected to server: ${server:-unknown}"
     echo "Ping: ${ping:-unavailable} ms"
     echo "Download Speed: ${download:-unavailable}"
     echo "Upload Speed: ${upload:-unavailable}"
   } >> "$report_file"
+}
+
+write_speed_test_json() {
+  local status="$1"
+  local success="$2"
+  local error_code="$3"
+  local error_message="$4"
+  local public_ip="$5"
+  local server_name="$6"
+  local server_location="$7"
+  local ping_latency="$8"
+  local download_speed="$9"
+  local upload_speed="${10}"
+  shift 10
+  local warnings=("$@")
+  local warnings_json
+
+  warnings_json="$(printf '%s\n' "${warnings[@]}" | jq -R . | jq -s .)"
+
+  jq -n \
+    --arg status "$status" \
+    --argjson success "$success" \
+    --arg error_code "$error_code" \
+    --arg error_message "$error_message" \
+    --arg public_ip "$public_ip" \
+    --arg server_name "$server_name" \
+    --arg location "$server_location" \
+    --arg ping_latency "$ping_latency" \
+    --arg download_speed "$download_speed" \
+    --arg upload_speed "$upload_speed" \
+    --argjson warnings "$warnings_json" \
+    '{
+      status: $status,
+      success: $success,
+      error: (if $error_code == "" and $error_message == "" then null else {code: $error_code, message: $error_message} end),
+      warnings: $warnings,
+      speed_tests_found: (if $success then 1 else 0 end),
+      servers: [
+        {
+          public_ip: $public_ip,
+          test_server: $server_name,
+          location: $location,
+          ping_ms: (if $ping_latency == "" or $ping_latency == "unavailable" then null else ($ping_latency | tonumber) end),
+          download_mbps: (if $download_speed == "" or $download_speed == "unavailable" then null else ($download_speed | tonumber) end),
+          upload_mbps: (if $upload_speed == "" or $upload_speed == "unavailable" then null else ($upload_speed | tonumber) end),
+          timestamp: ""
+        }
+      ]
+    }' > "$(task_output_path 2)"
+
+  validate_json_file "$(task_output_path 2)"
+}
+
+write_gateway_scan_json() {
+  local status="$1"
+  local success="$2"
+  local error_code="$3"
+  local error_message="$4"
+  local gateway_ip="$5"
+  shift 5
+  local rest=("$@")
+  local split_index=-1
+  local i
+  local ports=()
+  local warnings=()
+  local warnings_json
+
+  for ((i=0; i<${#rest[@]}; i++)); do
+    if [[ "${rest[$i]}" == "__WARNINGS__" ]]; then
+      split_index="$i"
+      break
+    fi
+  done
+
+  if (( split_index >= 0 )); then
+    ports=("${rest[@]:0:split_index}")
+    warnings=("${rest[@]:$((split_index + 1))}")
+  else
+    ports=("${rest[@]}")
+  fi
+
+  warnings_json="$(printf '%s\n' "${warnings[@]}" | jq -R . | jq -s .)"
+
+  jq -n \
+    --arg status "$status" \
+    --argjson success "$success" \
+    --arg error_code "$error_code" \
+    --arg error_message "$error_message" \
+    --arg gateway_ip "$gateway_ip" \
+    --argjson open_ports "$(ports_to_json_array "${ports[@]}")" \
+    --argjson warnings "$warnings_json" \
+    '{
+      status: $status,
+      success: $success,
+      error: (if $error_code == "" and $error_message == "" then null else {code: $error_code, message: $error_message} end),
+      warnings: $warnings,
+      gateway_ip: (if $gateway_ip == "" then null else $gateway_ip end),
+      open_ports: $open_ports
+    }' > "$(task_output_path 3)"
+
+  validate_json_file "$(task_output_path 3)"
+}
+
+write_dhcp_failure_json() {
+  local error_code="$1"
+  local error_message="$2"
+  local discovery_attempts="${3:-5}"
+  local warnings_json='[]'
+
+  jq -n \
+    --arg status "failed" \
+    --argjson success false \
+    --arg error_code "$error_code" \
+    --arg error_message "$error_message" \
+    --argjson discovery_attempts "$discovery_attempts" \
+    --argjson warnings "$warnings_json" \
+    '{
+      status: $status,
+      success: $success,
+      error: {code: $error_code, message: $error_message},
+      warnings: $warnings,
+      dhcp_responders_observed: 0,
+      discovery_attempts: $discovery_attempts,
+      offers_observed: 0,
+      raw_offers_observed: 0,
+      relay_sources_seen: [],
+      tcpdump_capture_used: false,
+      rogue_dhcp_suspected: false,
+      suspected_rogue_servers: [],
+      discovery_note: "",
+      raw_attempts: [],
+      servers: []
+    }' > "$(task_output_path 4)"
+
+  validate_json_file "$(task_output_path 4)"
+}
+
+update_dhcp_json_status() {
+  local file="$1"
+  local status="$2"
+  local success="$3"
+  local error_code="$4"
+  local error_message="$5"
+  shift 5
+  local warnings=("$@")
+  local warnings_json
+
+  warnings_json="$(printf '%s\n' "${warnings[@]}" | jq -R . | jq -s .)"
+
+  jq \
+    --arg status "$status" \
+    --argjson success "$success" \
+    --arg error_code "$error_code" \
+    --arg error_message "$error_message" \
+    --argjson warnings "$warnings_json" \
+    '.status = $status
+     | .success = $success
+     | .error = (if $error_code == "" and $error_message == "" then null else {code: $error_code, message: $error_message} end)
+     | .warnings = $warnings' \
+    "$file" > "$file.tmp" || return 1
+
+  mv "$file.tmp" "$file"
+  validate_json_file "$file"
 }
 
 internet_speed_test() {
@@ -1905,6 +2336,11 @@ internet_speed_test() {
   local public_ip server_name server_location ping_latency download_speed upload_speed
   local raw_server_name raw_server_location
   local download_display upload_display
+  local status="success"
+  local success="true"
+  local error_code=""
+  local error_message=""
+  local warnings=()
 
   if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
     echo
@@ -1925,6 +2361,9 @@ internet_speed_test() {
     echo "apt-get install speedtest-cli"
     echo "or"
     echo "dnf install speedtest-cli"
+    if command -v jq >/dev/null 2>&1; then
+      write_speed_test_json "failed" "false" "dependency_missing_speedtest_cli" "speedtest-cli is not installed." "unknown" "unknown" "" "unavailable" "unavailable" "unavailable"
+    fi
     return 1
   fi
 
@@ -1934,6 +2373,11 @@ internet_speed_test() {
   fi
 
   result_file="$(mktemp)"
+  if [[ -z "$result_file" || ! -f "$result_file" ]]; then
+    echo "Unable to create a temporary file for the speed test."
+    write_speed_test_json "failed" "false" "tempfile_creation_failed" "Unable to create a temporary file for the speed test." "unknown" "unknown" "" "unavailable" "unavailable" "unavailable"
+    return 1
+  fi
   speedtest-cli --secure > "$result_file" 2>&1 &
   pid=$!
   monitor_speedtest_progress "$pid" "$result_file" "$timeout_seconds"
@@ -1944,12 +2388,30 @@ internet_speed_test() {
   rm -f "$result_file"
 
   if [[ "$exit_code" -ne 0 ]]; then
+    status="failed"
+    success="false"
+    if [[ "$exit_code" -eq 124 ]]; then
+      error_code="speedtest_timeout"
+      error_message="The speed test timed out before completing."
+    elif printf '%s\n' "$result" | grep -qi 'Unable to connect to servers'; then
+      error_code="speedtest_backend_unreachable"
+      error_message="The internet connection may still be working, but speedtest-cli could not reach any test server."
+    else
+      error_code="speedtest_command_failed"
+      error_message="speedtest-cli exited with an error."
+    fi
+    write_speed_test_json "$status" "$success" "$error_code" "$error_message" "unknown" "unknown" "" "unavailable" "unavailable" "unavailable"
     echo "Speedtest failed. Raw output:"
     echo "$result"
     return 1
   fi
 
   if ! printf '%s\n' "$result" | grep -q '^Download:'; then
+    status="failed"
+    success="false"
+    error_code="speedtest_output_incomplete"
+    error_message="speedtest-cli finished, but the expected download result was not present in the output."
+    write_speed_test_json "$status" "$success" "$error_code" "$error_message" "unknown" "unknown" "" "unavailable" "unavailable" "unavailable"
     echo "Speedtest failed. Raw output:"
     echo "$result"
     return 1
@@ -1968,6 +2430,25 @@ internet_speed_test() {
   [[ -z "$raw_server_name" ]] && raw_server_name="unknown"
   [[ -z "$ping_latency" ]] && ping_latency="unavailable"
 
+  if [[ "$public_ip" == "unknown" ]]; then
+    warnings+=("The public IP address could not be parsed from speedtest-cli output.")
+  fi
+  if [[ "$raw_server_name" == "unknown" ]]; then
+    warnings+=("The test server name could not be parsed from speedtest-cli output.")
+  fi
+  if [[ "$ping_latency" == "unavailable" ]]; then
+    warnings+=("Ping latency was not available in the speedtest output.")
+  fi
+  if [[ "$download_speed" == "unavailable" ]]; then
+    warnings+=("Download speed was not available in the speedtest output.")
+  fi
+  if [[ "$upload_speed" == "unavailable" ]]; then
+    warnings+=("Upload speed was not available in the speedtest output.")
+  fi
+  if [[ "${#warnings[@]}" -gt 0 ]]; then
+    status="completed_with_warnings"
+  fi
+
   server_name="$raw_server_name"
   server_location="$raw_server_location"
 
@@ -1982,27 +2463,7 @@ internet_speed_test() {
 
   echo
 
-  jq -n \
-    --arg public_ip "$public_ip" \
-    --arg server_name "$raw_server_name" \
-    --arg location "$raw_server_location" \
-    --arg ping_latency "$ping_latency" \
-    --arg download_speed "$download_speed" \
-    --arg upload_speed "$upload_speed" '{
-      speed_tests_found: 1,
-      servers: [
-        {
-          public_ip: $public_ip,
-          test_server: $server_name,
-          location: $location,
-          ping_ms: (if $ping_latency == "unavailable" then null else ($ping_latency | tonumber) end),
-          download_mbps: (if $download_speed == "unavailable" then null else ($download_speed | tonumber) end),
-          upload_mbps: (if $upload_speed == "unavailable" then null else ($upload_speed | tonumber) end),
-          timestamp: ""
-        }
-      ]
-    }' > "$(task_output_path 2)"
-  validate_json_file "$(task_output_path 2)"
+  write_speed_test_json "$status" "$success" "$error_code" "$error_message" "$public_ip" "$raw_server_name" "$raw_server_location" "$ping_latency" "$download_speed" "$upload_speed" "${warnings[@]}"
   echo "Saved JSON:"
   echo "$(task_output_path 2)"
   echo
@@ -2016,6 +2477,11 @@ gateway_details() {
   local ports=()
   local port
   local raw_file
+  local status="success"
+  local success="true"
+  local error_code=""
+  local error_message=""
+  local warnings=()
 
   if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
     echo
@@ -2025,8 +2491,14 @@ gateway_details() {
 
   gateway_ip="$(get_gateway_ip "$iface")"
   if [[ -z "$gateway_ip" ]]; then
-    echo "Unable to determine default gateway."
-    return
+    status="failed"
+    success="false"
+    error_code="gateway_not_detected"
+    error_message="No default gateway could be determined for the selected interface."
+    write_gateway_scan_json "$status" "$success" "$error_code" "$error_message" ""
+    echo "Error: Unable to determine the default gateway for interface $iface."
+    echo "Possible causes include no active default route, a disconnected interface, a bridge-only interface, or a host that is not using this interface for its default route."
+    return 1
   fi
 
   echo "Done."
@@ -2037,11 +2509,25 @@ gateway_details() {
 
   local gateway_scan_file
   gateway_scan_file="$(mktemp)"
+  if [[ -z "$gateway_scan_file" || ! -f "$gateway_scan_file" ]]; then
+    status="failed"
+    success="false"
+    error_code="tempfile_creation_failed"
+    error_message="Unable to create a temporary file for the gateway scan."
+    write_gateway_scan_json "$status" "$success" "$error_code" "$error_message" "$gateway_ip"
+    echo "Error: Unable to create a temporary file for the gateway scan."
+    return 1
+  fi
   raw_file="$(task_raw_prefix 3)-nmap.grep"
 
   nmap -p- --open -T4 "$gateway_ip" -oG - > "$gateway_scan_file" 2>/dev/null &
   local gateway_scan_pid=$!
   monitor_nmap_progress "$gateway_scan_pid" "$gateway_scan_file" 120 "ports" "Open Ports:" "Gateway port scan failed for $gateway_ip." || {
+    status="failed"
+    success="false"
+    error_code="gateway_port_scan_failed"
+    error_message="The gateway port scan did not complete successfully."
+    write_gateway_scan_json "$status" "$success" "$error_code" "$error_message" "$gateway_ip"
     rm -f "$gateway_scan_file"
     return 1
   }
@@ -2070,12 +2556,12 @@ gateway_details() {
   ' "$gateway_scan_file")
   rm -f "$gateway_scan_file"
 
-  jq -n \
-    --arg gateway_ip "$gateway_ip" \
-    --argjson open_ports "$(ports_to_json_array "${ports[@]}")" \
-    '{gateway_ip: $gateway_ip, open_ports: $open_ports}' > "$(task_output_path 3)"
+  if [[ "${#ports[@]}" -eq 0 ]]; then
+    warnings+=("The gateway responded, but no open TCP ports were detected during the scan.")
+    status="completed_with_warnings"
+  fi
 
-  validate_json_file "$(task_output_path 3)"
+  write_gateway_scan_json "$status" "$success" "$error_code" "$error_message" "$gateway_ip" "${ports[@]}" "__WARNINGS__" "${warnings[@]}"
   echo "Saved JSON: $(task_output_path 3)"
 }
 
@@ -2088,6 +2574,12 @@ custom_target_port_scan() {
   local scan_file
   local raw_file
   local entry_index
+  local status="success"
+  local success="true"
+  local error_code=""
+  local error_message=""
+  local warnings=()
+  local warnings_json
 
   if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
     echo
@@ -2096,17 +2588,50 @@ custom_target_port_scan() {
 
   target_ip="$(prompt_for_target_ip "Target IP Address: ")"
   hostname="$(resolve_target_hostname "$target_ip")"
+  while IFS= read -r warning; do
+    [[ -n "$warning" ]] && warnings+=("$warning")
+  done < <(collect_custom_target_warnings "$target_ip" "$SELECTED_INTERFACE")
   echo "Target IP: $target_ip"
   echo "Hostname: $hostname"
+  if [[ "${#warnings[@]}" -gt 0 ]]; then
+    for warning in "${warnings[@]}"; do
+      echo "Warning: $warning"
+    done
+  fi
   echo
   echo "Stage 1: Scanning all open ports on target (this may take up to 1 minute)..."
 
   scan_file="$(mktemp)"
   entry_index="$(next_multi_entry_index 10)"
   raw_file="$(multi_entry_raw_prefix_for_index 10 "$entry_index")-nmap.grep"
+  json_file="$(multi_entry_output_path_for_index 10 "$entry_index")"
+  if [[ -z "$scan_file" || ! -f "$scan_file" ]]; then
+    jq -n \
+      --arg status "failed" \
+      --argjson success false \
+      --arg error_code "tempfile_creation_failed" \
+      --arg error_message "Unable to create a temporary file for the custom port scan." \
+      --arg target_ip "$target_ip" \
+      --arg hostname "$hostname" \
+      --argjson warnings '[]' \
+      '{status: $status, success: $success, error: {code: $error_code, message: $error_message}, warnings: $warnings, target_ip: $target_ip, hostname: $hostname, scan_type: "custom_target_port_scan", open_ports: []}' > "$json_file"
+    validate_json_file "$json_file"
+    echo "Error: Unable to create a temporary file for the custom port scan."
+    return 1
+  fi
   nmap -p- --open -T4 "$target_ip" -oG - > "$scan_file" 2>/dev/null &
   local scan_pid=$!
   monitor_nmap_progress "$scan_pid" "$scan_file" 120 "ports" "Open Ports:" "Custom target port scan failed for $target_ip." || {
+    jq -n \
+      --arg status "failed" \
+      --argjson success false \
+      --arg error_code "custom_target_port_scan_failed" \
+      --arg error_message "The custom target port scan did not complete successfully." \
+      --arg target_ip "$target_ip" \
+      --arg hostname "$hostname" \
+      --argjson warnings '[]' \
+      '{status: $status, success: $success, error: {code: $error_code, message: $error_message}, warnings: $warnings, target_ip: $target_ip, hostname: $hostname, scan_type: "custom_target_port_scan", open_ports: []}' > "$json_file"
+    validate_json_file "$json_file"
     rm -f "$scan_file"
     return 1
   }
@@ -2135,12 +2660,25 @@ custom_target_port_scan() {
   ' "$scan_file")
   rm -f "$scan_file"
 
-  json_file="$(multi_entry_output_path_for_index 10 "$entry_index")"
+  if [[ "${#ports[@]}" -eq 0 ]]; then
+    warnings+=("The scan completed, but no open TCP ports were detected on the target.")
+    status="completed_with_warnings"
+  elif [[ "${#warnings[@]}" -gt 0 ]]; then
+    status="completed_with_warnings"
+  fi
+  warnings_json="$(printf '%s\n' "${warnings[@]}" | jq -R . | jq -s .)"
   jq -n \
+    --arg status "$status" \
+    --argjson success true \
+    --argjson warnings "$warnings_json" \
     --arg target_ip "$target_ip" \
     --arg hostname "$hostname" \
     --argjson open_ports "$(ports_to_json_array "${ports[@]}")" \
     '{
+      status: $status,
+      success: $success,
+      error: null,
+      warnings: $warnings,
       target_ip: $target_ip,
       hostname: $hostname,
       scan_type: "custom_target_port_scan",
@@ -2335,6 +2873,10 @@ custom_target_dns_assessment() {
   local ptr_answers_json="[]"
   local version_response=""
   local software_hint="unknown"
+  local status="success"
+  local success="true"
+  local warnings=()
+  local warnings_json
 
   if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
     echo
@@ -2343,8 +2885,16 @@ custom_target_dns_assessment() {
 
   target_ip="$(prompt_for_target_ip "Target DNS IP Address: ")"
   hostname="$(resolve_target_hostname "$target_ip")"
+  while IFS= read -r warning; do
+    [[ -n "$warning" ]] && warnings+=("$warning")
+  done < <(collect_custom_target_warnings "$target_ip" "$SELECTED_INTERFACE")
   echo "Target IP: $target_ip"
   echo "Hostname: $hostname"
+  if [[ "${#warnings[@]}" -gt 0 ]]; then
+    for warning in "${warnings[@]}"; do
+      echo "Warning: $warning"
+    done
+  fi
   echo
 
   if command -v dig >/dev/null 2>&1; then
@@ -2353,6 +2903,18 @@ custom_target_dns_assessment() {
     query_tool="nslookup"
   else
     echo "This function requires dig or nslookup."
+    entry_index="$(next_multi_entry_index 14)"
+    json_file="$(multi_entry_output_path_for_index 14 "$entry_index")"
+    jq -n \
+      --arg status "failed" \
+      --argjson success false \
+      --arg error_code "dns_query_tool_missing" \
+      --arg error_message "This function requires dig or nslookup." \
+      --arg target_ip "$target_ip" \
+      --arg hostname "$hostname" \
+      --argjson warnings '[]' \
+      '{status: $status, success: $success, error: {code: $error_code, message: $error_message}, warnings: $warnings, target_ip: $target_ip, hostname: $hostname}' > "$json_file"
+    validate_json_file "$json_file"
     return 1
   fi
 
@@ -2437,6 +2999,14 @@ custom_target_dns_assessment() {
       dns_service_working=true
     fi
   fi
+  if [[ "$dns_service_working" == "false" ]]; then
+    warnings+=("The target did not behave like a working recursive DNS resolver for the test queries.")
+    status="completed_with_warnings"
+  fi
+  if [[ "$query_tool" == "nslookup" ]]; then
+    warnings+=("TCP and version.bind assessment is limited when dig is not available.")
+    status="completed_with_warnings"
+  fi
 
   echo "DNS Service Working: $dns_service_working"
   echo "Recursion Available: $recursion_available"
@@ -2448,7 +3018,11 @@ custom_target_dns_assessment() {
   echo "Note: Client-side DNS answers cannot reliably reveal where this resolver forwards upstream traffic. That requires packet capture on the DNS host, firewall, or gateway."
 
   json_file="$(multi_entry_output_path_for_index 14 "$entry_index")"
+  warnings_json="$(printf '%s\n' "${warnings[@]}" | jq -R . | jq -s .)"
   jq -n \
+    --arg status "$status" \
+    --argjson success true \
+    --argjson warnings "$warnings_json" \
     --arg target_ip "$target_ip" \
     --arg hostname "$hostname" \
     --arg query_tool "$query_tool" \
@@ -2465,6 +3039,10 @@ custom_target_dns_assessment() {
     --argjson tcp_answers "$tcp_answers_json" \
     --argjson ptr_answers "$ptr_answers_json" \
     '{
+      status: $status,
+      success: $success,
+      error: null,
+      warnings: $warnings,
       target_ip: $target_ip,
       hostname: $hostname,
       query_tool: $query_tool,
@@ -2515,6 +3093,10 @@ custom_target_identity_scan() {
   local services_json="[]"
   local combined_service_text=""
   local combined_identity_text=""
+  local status="success"
+  local success="true"
+  local warnings=()
+  local warnings_json
 
   if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
     echo
@@ -2523,18 +3105,50 @@ custom_target_identity_scan() {
 
   target_ip="$(prompt_for_target_ip "Target IP Address: ")"
   hostname="$(resolve_target_hostname "$target_ip")"
+  while IFS= read -r warning; do
+    [[ -n "$warning" ]] && warnings+=("$warning")
+  done < <(collect_custom_target_warnings "$target_ip" "$SELECTED_INTERFACE")
   echo "Target IP: $target_ip"
   echo "Hostname: $hostname"
+  if [[ "${#warnings[@]}" -gt 0 ]]; then
+    for warning in "${warnings[@]}"; do
+      echo "Warning: $warning"
+    done
+  fi
   echo
   echo "Stage 1: Discovering MAC address and vendor..."
 
   entry_index="$(next_multi_entry_index 13)"
   raw_prefix="$(multi_entry_raw_prefix_for_index 13 "$entry_index")"
   discovery_file="$(mktemp)"
+  json_file="$(multi_entry_output_path_for_index 13 "$entry_index")"
+  if [[ -z "$discovery_file" || ! -f "$discovery_file" ]]; then
+    jq -n \
+      --arg status "failed" \
+      --argjson success false \
+      --arg error_code "tempfile_creation_failed" \
+      --arg error_message "Unable to create a temporary file for custom identity discovery." \
+      --arg target_ip "$target_ip" \
+      --arg hostname "$hostname" \
+      --argjson warnings '[]' \
+      '{status: $status, success: $success, error: {code: $error_code, message: $error_message}, warnings: $warnings, target_ip: $target_ip, hostname: $hostname}' > "$json_file"
+    validate_json_file "$json_file"
+    return 1
+  fi
   nmap -sn "$target_ip" > "$discovery_file" 2>/dev/null &
   local discovery_pid=$!
   spinner
   wait_for_pid "$discovery_pid" "Custom target identity discovery failed for $target_ip." || {
+    jq -n \
+      --arg status "failed" \
+      --argjson success false \
+      --arg error_code "custom_identity_discovery_failed" \
+      --arg error_message "The custom target identity discovery scan did not complete successfully." \
+      --arg target_ip "$target_ip" \
+      --arg hostname "$hostname" \
+      --argjson warnings '[]' \
+      '{status: $status, success: $success, error: {code: $error_code, message: $error_message}, warnings: $warnings, target_ip: $target_ip, hostname: $hostname}' > "$json_file"
+    validate_json_file "$json_file"
     rm -f "$discovery_file"
     return 1
   }
@@ -2619,10 +3233,34 @@ custom_target_identity_scan() {
   echo "Stage 2: Running conservative service fingerprint scan..."
 
   services_file="$(mktemp)"
+  if [[ -z "$services_file" || ! -f "$services_file" ]]; then
+    jq -n \
+      --arg status "failed" \
+      --argjson success false \
+      --arg error_code "tempfile_creation_failed" \
+      --arg error_message "Unable to create a temporary file for custom identity fingerprinting." \
+      --arg target_ip "$target_ip" \
+      --arg hostname "$hostname" \
+      --argjson warnings '[]' \
+      '{status: $status, success: $success, error: {code: $error_code, message: $error_message}, warnings: $warnings, target_ip: $target_ip, hostname: $hostname}' > "$json_file"
+    validate_json_file "$json_file"
+    rm -f "$discovery_file"
+    return 1
+  fi
   nmap -Pn -sV --version-light "$target_ip" > "$services_file" 2>/dev/null &
   local scan_pid=$!
   spinner
   wait_for_pid "$scan_pid" "Custom target identity fingerprint failed for $target_ip." || {
+    jq -n \
+      --arg status "failed" \
+      --argjson success false \
+      --arg error_code "custom_identity_fingerprint_failed" \
+      --arg error_message "The custom target identity fingerprint scan did not complete successfully." \
+      --arg target_ip "$target_ip" \
+      --arg hostname "$hostname" \
+      --argjson warnings '[]' \
+      '{status: $status, success: $success, error: {code: $error_code, message: $error_message}, warnings: $warnings, target_ip: $target_ip, hostname: $hostname}' > "$json_file"
+    validate_json_file "$json_file"
     rm -f "$discovery_file" "$services_file"
     return 1
   }
@@ -2676,6 +3314,18 @@ custom_target_identity_scan() {
   device_type_hint="$(guess_device_type_from_identity "$combined_service_text" "$vendor_name" "$hostname")"
   confidence="$(guess_identity_confidence "$combined_service_text" "$vendor_name" "$hostname" "$device_type_hint")"
   identity_summary="$(build_identity_summary "$vendor_name" "$device_type_hint" "$combined_identity_text")"
+  if [[ "$host_state" == "down" ]]; then
+    warnings+=("The target appears to be down or not responding to the fingerprint scan.")
+  fi
+  if [[ -z "$mac_address" ]]; then
+    warnings+=("No MAC address could be identified for the target.")
+  fi
+  if jq -e 'length == 0' <<< "$services_json" >/dev/null 2>&1; then
+    warnings+=("No service banners were identified on the target.")
+  fi
+  if [[ "${#warnings[@]}" -gt 0 ]]; then
+    status="completed_with_warnings"
+  fi
 
   echo "Host State: $host_state"
   echo "Device Type Hint: $device_type_hint"
@@ -2684,8 +3334,11 @@ custom_target_identity_scan() {
   echo "Discovered Services:"
   jq -r 'if length == 0 then "none found" else .[] | "- \(.port) | \(.state) | \(.service) | \((.version // "") | if . == "" then "no version banner" else . end)" end' <<< "$services_json"
 
-  json_file="$(multi_entry_output_path_for_index 13 "$entry_index")"
+  warnings_json="$(printf '%s\n' "${warnings[@]}" | jq -R . | jq -s .)"
   jq -n \
+    --arg status "$status" \
+    --argjson success true \
+    --argjson warnings "$warnings_json" \
     --arg target_ip "$target_ip" \
     --arg hostname "$hostname" \
     --arg mac_address "$mac_address" \
@@ -2698,6 +3351,10 @@ custom_target_identity_scan() {
     --arg identity_summary "$identity_summary" \
     --argjson services "$services_json" \
     '{
+      status: $status,
+      success: $success,
+      error: null,
+      warnings: $warnings,
       target_ip: $target_ip,
       hostname: $hostname,
       mac_address: (if $mac_address == "" then null else $mac_address end),
@@ -2846,6 +3503,11 @@ run_stress_test_for_target() {
   local sustained_status="ok"
   local recovery_status="ok"
   local ramping_status="ok"
+  local status="success"
+  local success="true"
+  local error_code=""
+  local error_message=""
+  local warnings=()
 
   if ! confirm_gateway_stress_operation "$context_label" "$target_description"; then
     return 1
@@ -2860,6 +3522,24 @@ run_stress_test_for_target() {
       echo "or"
       echo "dnf install iputils"
     fi
+    if task_supports_multiple_entries "$task_id"; then
+      json_file="$(multi_entry_output_path_for_index "$task_id" "$(next_multi_entry_index "$task_id")")"
+    else
+      json_file="$(task_output_path "$task_id")"
+    fi
+    jq -n \
+      --arg status "failed" \
+      --argjson success false \
+      --arg error_code "ping_dependency_missing" \
+      --arg error_message "ping is required for stress testing." \
+      --arg function "$json_function_name" \
+      --arg target_key "$report_target_key" \
+      --arg target_ip "$target_ip" \
+      --arg hostname "unknown" \
+      --arg interface "$iface" \
+      --argjson warnings '[]' \
+      '{status: $status, success: $success, error: {code: $error_code, message: $error_message}, warnings: $warnings, function: $function, ($target_key): $target_ip, hostname: $hostname, interface: $interface}' > "$json_file"
+    validate_json_file "$json_file"
     return 1
   fi
 
@@ -2883,6 +3563,28 @@ run_stress_test_for_target() {
   ramp_sizes=(64 256 512 1024 1400)
   sustained_file="$(mktemp)"
   recovery_file="$(mktemp)"
+  if [[ -z "$baseline_file" || -z "$jitter_file" || -z "$large_file" || -z "$sustained_file" || -z "$recovery_file" ]]; then
+    echo "Error: Unable to create temporary files for the stress test."
+    if task_supports_multiple_entries "$task_id"; then
+      json_file="$(multi_entry_output_path_for_index "$task_id" "$(next_multi_entry_index "$task_id")")"
+    else
+      json_file="$(task_output_path "$task_id")"
+    fi
+    jq -n \
+      --arg status "failed" \
+      --argjson success false \
+      --arg error_code "tempfile_creation_failed" \
+      --arg error_message "Unable to create temporary files for the stress test." \
+      --arg function "$json_function_name" \
+      --arg target_key "$report_target_key" \
+      --arg target_ip "$target_ip" \
+      --arg hostname "$hostname" \
+      --arg interface "$iface" \
+      --argjson warnings '[]' \
+      '{status: $status, success: $success, error: {code: $error_code, message: $error_message}, warnings: $warnings, function: $function, ($target_key): $target_ip, hostname: $hostname, interface: $interface}' > "$json_file"
+    validate_json_file "$json_file"
+    return 1
+  fi
 
   echo "Stage 2: Baseline latency test (20 pings)..."
   if ! run_ping_stage "$baseline_file" ping -c 20 "$target_ip"; then
@@ -3006,6 +3708,8 @@ run_stress_test_for_target() {
 
   if [[ "$stage_failure" == "true" ]]; then
     stage_warning="One or more stress sub-tests failed on this host or target. Results may be partial."
+    warnings+=("$stage_warning")
+    status="completed_with_warnings"
   fi
   if [[ -n "$stage_warning" ]]; then
     warning_json="$(printf '%s' "$stage_warning" | jq -R .)"
@@ -3018,6 +3722,9 @@ run_stress_test_for_target() {
   fi
   json_tmp="$(mktemp)"
   if ! jq -n \
+    --arg status "$status" \
+    --argjson success true \
+    --argjson warnings "$(printf '%s\n' "${warnings[@]}" | jq -R . | jq -s .)" \
     --arg function "$json_function_name" \
     --arg target_key "$report_target_key" \
     --arg target_ip "$target_ip" \
@@ -3054,6 +3761,10 @@ run_stress_test_for_target() {
     --argjson ramping_maxes "$(ports_to_json_array "${ramping_maxes[@]}")" \
     --argjson ramping_losses "$(ports_to_json_array "${ramping_losses[@]}")" '
       {
+        status: $status,
+        success: $success,
+        error: null,
+        warnings: $warnings,
         function: $function,
         ($target_key): $target_ip,
         hostname: $hostname,
@@ -3229,6 +3940,14 @@ gateway_stress_test() {
 
   if [[ ! -f "$interface_info_file" ]]; then
     echo "Gateway could not be detected."
+    jq -n \
+      --arg status "failed" \
+      --argjson success false \
+      --arg error_code "interface_info_missing" \
+      --arg error_message "Gateway detection failed because Interface Network Info output was not available." \
+      --argjson warnings '[]' \
+      '{status: $status, success: $success, error: {code: $error_code, message: $error_message}, warnings: $warnings, function: "gateway_stress_test", gateway: null, hostname: "unknown", interface: null}' > "$(task_output_path 9)"
+    validate_json_file "$(task_output_path 9)"
     return 1
   fi
 
@@ -3241,6 +3960,15 @@ gateway_stress_test() {
 
   if [[ -z "$gateway" || "$gateway" == "null" ]]; then
     echo "Gateway could not be detected."
+    jq -n \
+      --arg status "failed" \
+      --argjson success false \
+      --arg error_code "gateway_not_detected" \
+      --arg error_message "No default gateway could be determined for the selected interface." \
+      --arg interface "$iface" \
+      --argjson warnings '[]' \
+      '{status: $status, success: $success, error: {code: $error_code, message: $error_message}, warnings: $warnings, function: "gateway_stress_test", gateway: null, hostname: "unknown", interface: $interface}' > "$(task_output_path 9)"
+    validate_json_file "$(task_output_path 9)"
     return 1
   fi
 
@@ -3285,6 +4013,11 @@ dhcp_network_scan() {
   local attempt_excerpt
   local tcpdump_pid=""
   local tcpdump_enabled=false
+  local status="success"
+  local success="true"
+  local error_code=""
+  local error_message=""
+  local warnings=()
 
   if [[ "$SHOW_FUNCTION_HEADER" -eq 1 ]]; then
     echo
@@ -3294,20 +4027,37 @@ dhcp_network_scan() {
   raw_prefix="$(task_raw_prefix 4)"
 
   dhcp_output_file="$(mktemp)"
+  if [[ -z "$dhcp_output_file" || ! -f "$dhcp_output_file" ]]; then
+    echo "Error: Unable to create a temporary file for DHCP discovery."
+    write_dhcp_failure_json "tempfile_creation_failed" "Unable to create a temporary file for DHCP discovery." "$discovery_attempts"
+    return 1
+  fi
   if [[ "$EUID" -eq 0 ]]; then
     dhcp_cmd=(nmap --script broadcast-dhcp-discover -e "$SELECTED_INTERFACE")
   elif command -v sudo >/dev/null 2>&1; then
     dhcp_cmd=(sudo nmap --script broadcast-dhcp-discover -e "$SELECTED_INTERFACE")
   else
     echo "DHCP discovery usually requires root privileges. Re-run as root or install sudo."
+    write_dhcp_failure_json "dhcp_privilege_required" "DHCP discovery usually requires root privileges. Re-run as root or install sudo." "$discovery_attempts"
     return 1
   fi
 
   gateway_ip="$(get_gateway_ip "$SELECTED_INTERFACE")"
+  if ! command -v tcpdump >/dev/null 2>&1; then
+    warnings+=("tcpdump is not available, so relay or proxy DHCP sources cannot be captured.")
+  elif [[ "$EUID" -ne 0 ]]; then
+    warnings+=("tcpdump capture was skipped because the script is not running as root.")
+  fi
 
   for ((attempt = 1; attempt <= discovery_attempts; attempt++)); do
     echo "DHCP discovery attempt $attempt of $discovery_attempts..."
     tcpdump_output_file="$(mktemp)"
+    if [[ -z "$tcpdump_output_file" || ! -f "$tcpdump_output_file" ]]; then
+      echo "Error: Unable to create a temporary file for DHCP packet capture."
+      rm -f "$dhcp_output_file"
+      write_dhcp_failure_json "tempfile_creation_failed" "Unable to create a temporary file for DHCP packet capture." "$discovery_attempts"
+      return 1
+    fi
     tcpdump_pid="$(capture_dhcp_traffic "$SELECTED_INTERFACE" "$tcpdump_output_file" || true)"
     if [[ -n "$tcpdump_pid" ]]; then
       tcpdump_enabled=true
@@ -3324,6 +4074,7 @@ dhcp_network_scan() {
       fi
       rm -f "$tcpdump_output_file"
       rm -f "$dhcp_output_file"
+      write_dhcp_failure_json "dhcp_discovery_attempt_failed" "A DHCP discovery attempt did not complete successfully." "$discovery_attempts"
       return 1
     }
 
@@ -3393,6 +4144,9 @@ dhcp_network_scan() {
 
   json_file="$(task_output_path 4)"
   jq -n \
+    --arg status "success" \
+    --argjson success true \
+    --argjson warnings '[]' \
     --argjson dhcp_responders_observed "${#unique_servers[@]}" \
     --argjson discovery_attempts "$discovery_attempts" \
     --argjson offers_observed "$unique_offers_observed" \
@@ -3401,6 +4155,10 @@ dhcp_network_scan() {
     --argjson tcpdump_capture_used "$tcpdump_enabled" \
     --arg discovery_note "$discovery_note" \
     '{
+      status: $status,
+      success: $success,
+      error: null,
+      warnings: $warnings,
       dhcp_responders_observed: $dhcp_responders_observed,
       discovery_attempts: $discovery_attempts,
       offers_observed: $offers_observed,
@@ -3433,9 +4191,15 @@ dhcp_network_scan() {
   done
 
   if [[ "${#unique_servers[@]}" -eq 0 ]]; then
+    warnings+=("No DHCP responders were observed during the discovery attempts. This does not necessarily mean that no DHCP server exists on the network.")
+    status="completed_with_warnings"
+    update_dhcp_json_status "$json_file" "$status" "$success" "$error_code" "$error_message" "${warnings[@]}" || {
+      echo "Failed to finalize DHCP JSON status."
+      return 1
+    }
     echo "Saved JSON: $json_file"
     validate_json_file "$json_file"
-    return
+    return 0
   fi
 
   echo "Stage 2: Scanning for ports on DHCP server(s)..."
@@ -3453,10 +4217,15 @@ dhcp_network_scan() {
     echo "Scanning all ports on Server $((idx + 1)) (this may take up to 1 minute)..."
 
     dhcp_scan_file="$(mktemp)"
+    if [[ -z "$dhcp_scan_file" || ! -f "$dhcp_scan_file" ]]; then
+      write_dhcp_failure_json "tempfile_creation_failed" "Unable to create a temporary file for DHCP server port scanning." "$discovery_attempts"
+      return 1
+    fi
     nmap -p- --open "$server" -oG - > "$dhcp_scan_file" 2>/dev/null &
     local dhcp_scan_pid=$!
     monitor_nmap_progress "$dhcp_scan_pid" "$dhcp_scan_file" 120 "ports" "Open Ports:" "DHCP server port scan failed for $server." || {
       rm -f "$dhcp_scan_file"
+      write_dhcp_failure_json "dhcp_server_port_scan_failed" "The port scan for a discovered DHCP responder did not complete successfully." "$discovery_attempts"
       return 1
     }
     echo
@@ -3493,6 +4262,10 @@ dhcp_network_scan() {
     echo "Unique Offers Observed: $(count_unique_offer_keys_for_server "$server" "${unique_offer_keys[@]:-}")"
     echo "Raw Offers Captured: $offer_count"
     echo "Classification: $classification"
+    if [[ "${#open_ports[@]}" -eq 0 ]]; then
+      echo "Warning: No open TCP ports were detected on this DHCP responder."
+      warnings+=("No open TCP ports were detected on DHCP responder $server.")
+    fi
     if [[ "$suspected_rogue" == "true" ]]; then
       echo "Suspected Rogue DHCP Responder: YES"
     else
@@ -3532,6 +4305,14 @@ dhcp_network_scan() {
     }
   mv "$json_file.tmp" "$json_file"
 
+  if [[ "${#warnings[@]}" -gt 0 ]]; then
+    status="completed_with_warnings"
+  fi
+  update_dhcp_json_status "$json_file" "$status" "$success" "$error_code" "$error_message" "${warnings[@]}" || {
+    echo "Failed to finalize DHCP JSON status."
+    return 1
+  }
+
   echo "Saved JSON: $json_file"
   validate_json_file "$json_file"
 }
@@ -3540,19 +4321,38 @@ dhcp_network_scan() {
 render_interface_info_report() {
   local file="$1"
   local report_file="$2"
-  local iface ip subnet network mac
+  local iface ip subnet network mac gateway
+  local status success error_code error_message warning_count
 
+  status="$(jq -r '.status // "success"' "$file" 2>/dev/null)"
+  success="$(jq -r '.success // true' "$file" 2>/dev/null)"
+  error_code="$(jq -r '.error.code // empty' "$file" 2>/dev/null)"
+  error_message="$(jq -r '.error.message // empty' "$file" 2>/dev/null)"
+  warning_count="$(jq -r '(.warnings // []) | length' "$file" 2>/dev/null)"
   iface="$(jq -r '.interface // "unknown"' "$file" 2>/dev/null)"
   ip="$(jq -r '.ip_address // "unknown"' "$file" 2>/dev/null)"
   subnet="$(jq -r '.subnet // "unknown"' "$file" 2>/dev/null)"
   network="$(jq -r '.network // "unknown"' "$file" 2>/dev/null)"
+  gateway="$(jq -r '.gateway // "unknown"' "$file" 2>/dev/null)"
   mac="$(jq -r '.mac_address // "unknown"' "$file" 2>/dev/null)"
 
   {
+    echo "Status: ${status:-unknown}"
+    echo "Success: ${success:-false}"
+    if [[ -n "$error_code" ]]; then
+      echo "Error Code: $error_code"
+    fi
+    if [[ -n "$error_message" ]]; then
+      echo "Error Message: $error_message"
+    fi
+    if [[ -n "$warning_count" && "$warning_count" != "0" ]]; then
+      echo "Warnings: $warning_count"
+    fi
     echo "Interface: ${iface:-unknown}"
     echo "IP Address: ${ip:-unknown}"
     echo "Subnet Mask: ${subnet:-unknown}"
     echo "Network Range: ${network:-unknown}"
+    echo "Gateway: ${gateway:-unknown}"
     echo "MAC Address: ${mac:-unknown}"
   } >> "$report_file"
 }
@@ -3561,11 +4361,28 @@ render_gateway_report() {
   local file="$1"
   local report_file="$2"
   local gateway ports
+  local status success error_code error_message warning_count
 
+  status="$(jq -r '.status // "success"' "$file" 2>/dev/null)"
+  success="$(jq -r '.success // true' "$file" 2>/dev/null)"
+  error_code="$(jq -r '.error.code // empty' "$file" 2>/dev/null)"
+  error_message="$(jq -r '.error.message // empty' "$file" 2>/dev/null)"
+  warning_count="$(jq -r '(.warnings // []) | length' "$file" 2>/dev/null)"
   gateway="$(jq -r '.gateway_ip // "unknown"' "$file" 2>/dev/null)"
   ports="$(jq -r '(.open_ports // []) | map(tostring) | join(", ")' "$file" 2>/dev/null)"
 
   {
+    echo "Status: ${status:-unknown}"
+    echo "Success: ${success:-false}"
+    if [[ -n "$error_code" ]]; then
+      echo "Error Code: $error_code"
+    fi
+    if [[ -n "$error_message" ]]; then
+      echo "Error Message: $error_message"
+    fi
+    if [[ -n "$warning_count" && "$warning_count" != "0" ]]; then
+      echo "Warnings: $warning_count"
+    fi
     echo "Gateway IP: ${gateway:-unknown}"
     if [[ -n "$ports" ]]; then
       echo "Open Ports: $ports"
@@ -3580,7 +4397,13 @@ render_gateway_stress_report() {
   local report_file="$2"
   local gateway iface baseline_avg sustained_avg high_jitter latency_under_load packet_loss slow_recovery
   local completed_with_warnings warning stage_status
+  local status success error_code error_message warning_count
 
+  status="$(jq -r '.status // "success"' "$file" 2>/dev/null)"
+  success="$(jq -r '.success // true' "$file" 2>/dev/null)"
+  error_code="$(jq -r '.error.code // empty' "$file" 2>/dev/null)"
+  error_message="$(jq -r '.error.message // empty' "$file" 2>/dev/null)"
+  warning_count="$(jq -r '(.warnings // []) | length' "$file" 2>/dev/null)"
   gateway="$(jq -r '.gateway // "unknown"' "$file" 2>/dev/null)"
   iface="$(jq -r '.interface // "unknown"' "$file" 2>/dev/null)"
   completed_with_warnings="$(jq -r '.completed_with_warnings // false' "$file" 2>/dev/null)"
@@ -3594,6 +4417,17 @@ render_gateway_stress_report() {
   slow_recovery="$(jq -r '.indicators.slow_recovery // false' "$file" 2>/dev/null)"
 
   {
+    echo "Status: ${status:-unknown}"
+    echo "Success: ${success:-false}"
+    if [[ -n "$error_code" ]]; then
+      echo "Error Code: $error_code"
+    fi
+    if [[ -n "$error_message" ]]; then
+      echo "Error Message: $error_message"
+    fi
+    if [[ -n "$warning_count" && "$warning_count" != "0" ]]; then
+      echo "Warnings: $warning_count"
+    fi
     echo "Gateway IP: ${gateway}"
     echo "Interface: ${iface}"
     echo "Completed With Warnings: ${completed_with_warnings}"
@@ -3616,11 +4450,28 @@ render_custom_target_port_scan_report() {
   local file="$1"
   local report_file="$2"
   local target_ip hostname
+  local status success error_code error_message warning_count
 
+  status="$(jq -r '.status // "success"' "$file" 2>/dev/null)"
+  success="$(jq -r '.success // true' "$file" 2>/dev/null)"
+  error_code="$(jq -r '.error.code // empty' "$file" 2>/dev/null)"
+  error_message="$(jq -r '.error.message // empty' "$file" 2>/dev/null)"
+  warning_count="$(jq -r '(.warnings // []) | length' "$file" 2>/dev/null)"
   target_ip="$(jq -r '.target_ip // "unknown"' "$file" 2>/dev/null)"
   hostname="$(jq -r '.hostname // "unknown"' "$file" 2>/dev/null)"
 
   {
+    echo "Status: ${status:-unknown}"
+    echo "Success: ${success:-false}"
+    if [[ -n "$error_code" ]]; then
+      echo "Error Code: $error_code"
+    fi
+    if [[ -n "$error_message" ]]; then
+      echo "Error Message: $error_message"
+    fi
+    if [[ -n "$warning_count" && "$warning_count" != "0" ]]; then
+      echo "Warnings: $warning_count"
+    fi
     echo "Target IP: ${target_ip}"
     echo "Hostname: ${hostname}"
   } >> "$report_file"
@@ -3633,7 +4484,13 @@ render_custom_target_stress_report() {
   local report_file="$2"
   local target_ip hostname iface baseline_avg sustained_avg high_jitter latency_under_load packet_loss slow_recovery
   local completed_with_warnings warning stage_status
+  local status success error_code error_message warning_count
 
+  status="$(jq -r '.status // "success"' "$file" 2>/dev/null)"
+  success="$(jq -r '.success // true' "$file" 2>/dev/null)"
+  error_code="$(jq -r '.error.code // empty' "$file" 2>/dev/null)"
+  error_message="$(jq -r '.error.message // empty' "$file" 2>/dev/null)"
+  warning_count="$(jq -r '(.warnings // []) | length' "$file" 2>/dev/null)"
   target_ip="$(jq -r '.target_ip // "unknown"' "$file" 2>/dev/null)"
   hostname="$(jq -r '.hostname // "unknown"' "$file" 2>/dev/null)"
   iface="$(jq -r '.interface // "unknown"' "$file" 2>/dev/null)"
@@ -3648,6 +4505,17 @@ render_custom_target_stress_report() {
   slow_recovery="$(jq -r '.indicators.slow_recovery // false' "$file" 2>/dev/null)"
 
   {
+    echo "Status: ${status:-unknown}"
+    echo "Success: ${success:-false}"
+    if [[ -n "$error_code" ]]; then
+      echo "Error Code: $error_code"
+    fi
+    if [[ -n "$error_message" ]]; then
+      echo "Error Message: $error_message"
+    fi
+    if [[ -n "$warning_count" && "$warning_count" != "0" ]]; then
+      echo "Warnings: $warning_count"
+    fi
     echo "Target IP: ${target_ip}"
     echo "Hostname: ${hostname}"
     echo "Interface: ${iface}"
@@ -3672,7 +4540,13 @@ render_custom_target_identity_report() {
   local report_file="$2"
   local target_ip hostname mac_address vendor vendor_source lookup_method
   local host_state device_type_hint confidence identity_summary
+  local status success error_code error_message warning_count
 
+  status="$(jq -r '.status // "success"' "$file" 2>/dev/null)"
+  success="$(jq -r '.success // true' "$file" 2>/dev/null)"
+  error_code="$(jq -r '.error.code // empty' "$file" 2>/dev/null)"
+  error_message="$(jq -r '.error.message // empty' "$file" 2>/dev/null)"
+  warning_count="$(jq -r '(.warnings // []) | length' "$file" 2>/dev/null)"
   target_ip="$(jq -r '.target_ip // "unknown"' "$file" 2>/dev/null)"
   hostname="$(jq -r '.hostname // "unknown"' "$file" 2>/dev/null)"
   mac_address="$(jq -r '.mac_address // "unknown"' "$file" 2>/dev/null)"
@@ -3685,6 +4559,17 @@ render_custom_target_identity_report() {
   identity_summary="$(jq -r '.identity_summary // "Unknown device identity"' "$file" 2>/dev/null)"
 
   {
+    echo "Status: ${status:-unknown}"
+    echo "Success: ${success:-false}"
+    if [[ -n "$error_code" ]]; then
+      echo "Error Code: $error_code"
+    fi
+    if [[ -n "$error_message" ]]; then
+      echo "Error Message: $error_message"
+    fi
+    if [[ -n "$warning_count" && "$warning_count" != "0" ]]; then
+      echo "Warnings: $warning_count"
+    fi
     echo "Target IP: ${target_ip}"
     echo "Hostname: ${hostname}"
     echo "MAC Address: ${mac_address}"
@@ -3706,7 +4591,13 @@ render_custom_target_dns_assessment_report() {
   local report_file="$2"
   local target_ip hostname query_tool dns_service_working recursion_available
   local udp_status tcp_status ptr_status software_hint upstream_inference upstream_note
+  local status success error_code error_message warning_count
 
+  status="$(jq -r '.status // "success"' "$file" 2>/dev/null)"
+  success="$(jq -r '.success // true' "$file" 2>/dev/null)"
+  error_code="$(jq -r '.error.code // empty' "$file" 2>/dev/null)"
+  error_message="$(jq -r '.error.message // empty' "$file" 2>/dev/null)"
+  warning_count="$(jq -r '(.warnings // []) | length' "$file" 2>/dev/null)"
   target_ip="$(jq -r '.target_ip // "unknown"' "$file" 2>/dev/null)"
   hostname="$(jq -r '.hostname // "unknown"' "$file" 2>/dev/null)"
   query_tool="$(jq -r '.query_tool // "unknown"' "$file" 2>/dev/null)"
@@ -3720,6 +4611,17 @@ render_custom_target_dns_assessment_report() {
   upstream_note="$(jq -r '.upstream_visibility_note // empty' "$file" 2>/dev/null)"
 
   {
+    echo "Status: ${status:-unknown}"
+    echo "Success: ${success:-false}"
+    if [[ -n "$error_code" ]]; then
+      echo "Error Code: $error_code"
+    fi
+    if [[ -n "$error_message" ]]; then
+      echo "Error Message: $error_message"
+    fi
+    if [[ -n "$warning_count" && "$warning_count" != "0" ]]; then
+      echo "Warnings: $warning_count"
+    fi
     echo "Target IP: ${target_ip}"
     echo "Hostname: ${hostname}"
     echo "Query Tool: ${query_tool}"
@@ -3748,7 +4650,13 @@ render_dhcp_report() {
   local offers_observed
   local raw_offers_observed
   local rogue_suspected
+  local status success error_code error_message warning_count
 
+  status="$(jq -r '.status // "success"' "$file" 2>/dev/null)"
+  success="$(jq -r '.success // true' "$file" 2>/dev/null)"
+  error_code="$(jq -r '.error.code // empty' "$file" 2>/dev/null)"
+  error_message="$(jq -r '.error.message // empty' "$file" 2>/dev/null)"
+  warning_count="$(jq -r '(.warnings // []) | length' "$file" 2>/dev/null)"
   found="$(jq -r '.dhcp_responders_observed // .dhcp_servers_found // 0' "$file" 2>/dev/null)"
   attempts="$(jq -r '.discovery_attempts // 1' "$file" 2>/dev/null)"
   offers_observed="$(jq -r '.offers_observed // 0' "$file" 2>/dev/null)"
@@ -3756,6 +4664,17 @@ render_dhcp_report() {
   rogue_suspected="$(jq -r '.rogue_dhcp_suspected // false' "$file" 2>/dev/null)"
 
   {
+    echo "Status: ${status:-unknown}"
+    echo "Success: ${success:-false}"
+    if [[ -n "$error_code" ]]; then
+      echo "Error Code: $error_code"
+    fi
+    if [[ -n "$error_message" ]]; then
+      echo "Error Message: $error_message"
+    fi
+    if [[ -n "$warning_count" && "$warning_count" != "0" ]]; then
+      echo "Warnings: $warning_count"
+    fi
     echo "DHCP Responders Observed: ${found:-0}"
     echo "Discovery Attempts: ${attempts:-1}"
     echo "Unique Offers Observed: ${offers_observed:-0}"
@@ -3775,12 +4694,29 @@ render_generic_network_scan_report() {
   local report_file="$2"
   local label="$3"
   local network ports server_count
+  local status success error_code error_message warning_count
 
+  status="$(jq -r '.status // "success"' "$file" 2>/dev/null)"
+  success="$(jq -r '.success // true' "$file" 2>/dev/null)"
+  error_code="$(jq -r '.error.code // empty' "$file" 2>/dev/null)"
+  error_message="$(jq -r '.error.message // empty' "$file" 2>/dev/null)"
+  warning_count="$(jq -r '(.warnings // []) | length' "$file" 2>/dev/null)"
   network="$(jq -r '.network // "unknown"' "$file" 2>/dev/null)"
   ports="$(jq -r '.scan_ports // "unknown"' "$file" 2>/dev/null)"
   server_count="$(jq -r '(.servers // []) | length' "$file" 2>/dev/null)"
 
   {
+    echo "Status: ${status:-unknown}"
+    echo "Success: ${success:-false}"
+    if [[ -n "$error_code" ]]; then
+      echo "Error Code: $error_code"
+    fi
+    if [[ -n "$error_message" ]]; then
+      echo "Error Message: $error_message"
+    fi
+    if [[ -n "$warning_count" && "$warning_count" != "0" ]]; then
+      echo "Warnings: $warning_count"
+    fi
     echo "Network Range: ${network:-unknown}"
     echo "Scanned Ports: ${ports:-unknown}"
     echo "Servers Found: $server_count"
