@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_VERSION="v1.0.0"
+APP_VERSION="v1.0.3"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 OUTPUT_DIR="$SCRIPT_DIR/output"
 RUN_OUTPUT_DIR=""
