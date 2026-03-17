@@ -3,7 +3,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_NAME="lss-network-tools"
 APP_VERSION="v1.0.7"
+APP_ROOT="$SCRIPT_DIR"
+DATA_ROOT="$SCRIPT_DIR"
+TMP_ROOT="$SCRIPT_DIR/tmp"
+INSTALL_MODE="portable"
+INSTALL_WRAPPER_PATH="/usr/local/bin/lss-network-tools"
 OUTPUT_DIR="$SCRIPT_DIR/output"
 RUN_OUTPUT_DIR=""
 RUN_DATE_STAMP=""
@@ -19,8 +25,7 @@ RUN_DEBUG_LOG=""
 RUN_MANIFEST_FILE=""
 OUTPUT_IS_TTY=0
 DEBUG_MODE=0
-
-mkdir -p "$OUTPUT_DIR"
+UNINSTALL_MODE=0
 
 OS=""
 SHOW_FUNCTION_HEADER=1
@@ -44,6 +49,56 @@ TASKS
 
 print_alert() {
   echo "ALERT: $1"
+}
+
+configure_runtime_paths() {
+  local install_config="$SCRIPT_DIR/install.env"
+
+  if [[ -f "$install_config" ]]; then
+    # shellcheck disable=SC1090
+    source "$install_config"
+    INSTALL_MODE="installed"
+    APP_ROOT="${APP_ROOT:-$SCRIPT_DIR}"
+    DATA_ROOT="${DATA_ROOT:-$SCRIPT_DIR}"
+    INSTALL_WRAPPER_PATH="${INSTALL_WRAPPER_PATH:-/usr/local/bin/$APP_NAME}"
+    TMP_ROOT="$DATA_ROOT/tmp"
+    OUTPUT_DIR="$DATA_ROOT/output"
+    return 0
+  fi
+
+  case "$OS" in
+    macos)
+      if [[ "$SCRIPT_DIR" == "/usr/local/share/$APP_NAME" ]]; then
+        INSTALL_MODE="installed"
+        APP_ROOT="/usr/local/share/$APP_NAME"
+        DATA_ROOT="$APP_ROOT"
+      else
+        INSTALL_MODE="portable"
+        APP_ROOT="$SCRIPT_DIR"
+        DATA_ROOT="$SCRIPT_DIR"
+      fi
+      ;;
+    linux)
+      if [[ "$SCRIPT_DIR" == "/usr/local/lib/$APP_NAME" ]]; then
+        INSTALL_MODE="installed"
+        APP_ROOT="/usr/local/lib/$APP_NAME"
+        DATA_ROOT="/var/lib/$APP_NAME"
+      else
+        INSTALL_MODE="portable"
+        APP_ROOT="$SCRIPT_DIR"
+        DATA_ROOT="$SCRIPT_DIR"
+      fi
+      ;;
+  esac
+
+  TMP_ROOT="$DATA_ROOT/tmp"
+  OUTPUT_DIR="$DATA_ROOT/output"
+}
+
+ensure_runtime_directories() {
+  mkdir -p "$OUTPUT_DIR" "$TMP_ROOT"
+  mkdir -p "$DATA_ROOT/raw"
+  export TMPDIR="$TMP_ROOT"
 }
 
 validate_json_file() {
@@ -163,15 +218,134 @@ initialize_debug_logging() {
   exec > >(tee -a "$SESSION_DEBUG_LOG") 2>&1
 }
 
+is_installed_mode() {
+  [[ "$INSTALL_MODE" == "installed" ]]
+}
+
+installed_wrapper_path() {
+  printf '%s\n' "$INSTALL_WRAPPER_PATH"
+}
+
+create_backup_zip() {
+  local backup_destination="$1"
+  local staging_dir=""
+  local backup_name=""
+
+  if ! command -v zip >/dev/null 2>&1; then
+    echo "Backup requires the zip command, but it is not available."
+    return 1
+  fi
+
+  mkdir -p "$backup_destination"
+  backup_name="${APP_NAME}-backup-$(date +%Y%m%d-%H%M%S).zip"
+  staging_dir="$(mktemp -d "/tmp/${APP_NAME}-backup-XXXXXX")"
+
+  if [[ "$OS" == "linux" ]]; then
+    cp -R "$APP_ROOT" "$staging_dir/app"
+    cp -R "$DATA_ROOT" "$staging_dir/data"
+  else
+    cp -R "$APP_ROOT" "$staging_dir/app"
+  fi
+
+  (
+    cd "$staging_dir"
+    zip -qr "$backup_destination/$backup_name" .
+  )
+
+  rm -rf "$staging_dir"
+  echo "$backup_destination/$backup_name"
+}
+
+uninstall_installed_application() {
+  local wrapper_path=""
+  local uninstall_choice=""
+  local backup_choice=""
+  local backup_dir=""
+  local backup_file=""
+
+  if ! is_installed_mode; then
+    echo "This command only works from an installed deployment."
+    return 1
+  fi
+
+  wrapper_path="$(installed_wrapper_path)"
+
+  echo
+  echo "Uninstall LSS Network Tools"
+  echo "==========================="
+  echo
+  echo "This will remove the installed application and all stored data."
+  if [[ "$OS" == "linux" ]]; then
+    echo "App path: $APP_ROOT"
+    echo "Data path: $DATA_ROOT"
+  else
+    echo "Installed path: $APP_ROOT"
+  fi
+  echo
+  echo "Backup data before uninstall?"
+  echo "1) Yes"
+  echo "2) No"
+  echo "3) Cancel"
+  echo
+  read -r -p "Choose option: " backup_choice
+
+  case "$backup_choice" in
+    1)
+      read -r -p "Enter backup destination directory: " backup_dir
+      if [[ -z "$backup_dir" ]]; then
+        echo "Backup cancelled because no destination was provided."
+        return 1
+      fi
+      case "$backup_dir" in
+        "$APP_ROOT"|"$APP_ROOT"/*|"$DATA_ROOT"|"$DATA_ROOT"/*)
+          echo "Backup destination cannot be inside the installed application or data directories."
+          return 1
+          ;;
+      esac
+      backup_file="$(create_backup_zip "$backup_dir")" || return 1
+      echo "Backup created: $backup_file"
+      ;;
+    2)
+      ;;
+    3)
+      echo "Uninstall cancelled."
+      return 0
+      ;;
+    *)
+      echo "Uninstall cancelled."
+      return 1
+      ;;
+  esac
+
+  echo
+  read -r -p "Type DELETE to permanently remove LSS Network Tools: " uninstall_choice
+  if [[ "$uninstall_choice" != "DELETE" ]]; then
+    echo "Uninstall cancelled."
+    return 0
+  fi
+
+  rm -f "$wrapper_path"
+  rm -rf "$APP_ROOT"
+  if [[ "$OS" == "linux" ]]; then
+    rm -rf "$DATA_ROOT"
+  fi
+
+  echo "LSS Network Tools has been removed."
+  return 0
+}
+
 parse_args() {
   while [[ "$#" -gt 0 ]]; do
     case "$1" in
       --debug)
         DEBUG_MODE=1
         ;;
+      --uninstall)
+        UNINSTALL_MODE=1
+        ;;
       *)
         echo "Unknown option: $1"
-        echo "Usage: ./lss-network-tools.sh [--debug]"
+        echo "Usage: lss-network-tools [--debug] [--uninstall]"
         exit 1
         ;;
     esac
@@ -5387,9 +5561,14 @@ detect_os() {
 
 parse_args "$@"
 detect_os
+configure_runtime_paths
+ensure_runtime_directories
+if [[ "$UNINSTALL_MODE" -eq 1 ]]; then
+  uninstall_installed_application
+  exit $?
+fi
 clear_screen_if_supported
 check_tools
-mkdir -p "$OUTPUT_DIR"
 warn_if_not_root
 startup_menu
 initialize_debug_logging

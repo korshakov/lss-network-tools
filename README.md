@@ -12,8 +12,8 @@ Preferred install method:
 git clone https://github.com/lssolutions-ie/lss-network-tools.git
 cd lss-network-tools
 chmod +x *.sh
-./install.sh
-./lss-network-tools.sh
+sudo ./install.sh
+sudo lss-network-tools
 ```
 
 Alternative install method:
@@ -25,9 +25,11 @@ Alternative install method:
 
 ```bash
 chmod +x *.sh
-./install.sh
-./lss-network-tools.sh
+sudo ./install.sh
+sudo lss-network-tools
 ```
+
+After a successful install, the extracted or cloned source folder is no longer required for normal use.
 
 ## What it does
 
@@ -83,7 +85,7 @@ High-impact warning:
 - **Startup utility menu** for running scans, rebuilding reports from previous runs, and deleting stored runs.
 - **Interactive interface selector** (on macOS, includes hardware port descriptions when available).
 - **Run context prompt** for location and client name after interface selection.
-- **Timestamped run folder per session** under `output/`, so prior runs stay intact.
+- **Timestamped run folder per session** under the installed data root, so prior runs stay intact.
 - **One folder per client/location/day** using `output/<client>-<location>-DD-MM-YYYY/`.
 - **Progress indicators/spinners** for long-running scan stages.
 - **Speedtest timeout protection** (fails gracefully if it takes too long).
@@ -105,48 +107,60 @@ High-impact warning:
 
 ## Installation details
 
-Run from repo root:
+Run from the extracted or cloned project folder:
 
 ```bash
-./install.sh
+sudo ./install.sh
 ```
 
 `install.sh` will:
 
 - Detect OS (macOS/Linux)
-- On macOS, expect to run `install.sh` as your normal user. Homebrew may ask for your password during installation, but you should not run the whole installer with `sudo` just for that.
-- Install Homebrew if missing on supported non-root setups
-- Install required dependencies (for example: `nmap`, `jq`, `speedtest-cli`, `ping`, `tcpdump`, and platform-specific networking tools)
-- Create `output/` if needed
-- Ensure `lss-network-tools.sh` is executable
-- If the extracted ZIP folder name looks like `lss-network-tools-<version>`, it will try to normalize it back to `lss-network-tools` when safe to do so
+- Require `sudo` / root
+- Install required dependencies (for example: `nmap`, `jq`, `speedtest-cli`, `ping`, `tcpdump`, `zip`, and platform-specific networking tools)
+- Deploy the application command to `/usr/local/bin/lss-network-tools`
+- Deploy application files to:
+  - macOS: `/usr/local/share/lss-network-tools`
+  - Linux: `/usr/local/lib/lss-network-tools`
+- Create runtime data directories:
+  - macOS: `/usr/local/share/lss-network-tools/output`
+  - Linux: `/var/lib/lss-network-tools/output`
+  - Linux temp/data helpers: `/var/lib/lss-network-tools/raw` and `/var/lib/lss-network-tools/tmp`
+- Overwrite the existing `lss-network-tools` command wrapper on reinstall
+- Preserve existing scan data on reinstall
 
 ## Running
 
 ```bash
-./lss-network-tools.sh
+sudo lss-network-tools
 ```
 
 For cleaner troubleshooting output without spinner redraws:
 
 ```bash
-./lss-network-tools.sh --debug
+sudo lss-network-tools --debug
 ```
 
-> Some scans (notably DHCP discovery) may require root privileges. On Linux root servers, the installer prefers native packages and does not require `sudo`.
+To remove the installed application later:
+
+```bash
+sudo lss-network-tools --uninstall
+```
+
+> The installed command is intended to be run with `sudo`.
 > If `tcpdump` is installed and the tool is running as root, DHCP scan output will also record relay or proxy packet sources to help explain duplicate offers.
 > If `curl` is available, Function `13` can also use an online MAC vendor lookup fallback when local vendor detection is incomplete.
 > Stress tests are intentionally high-impact. If the target is a client gateway or firewall, consider disconnecting it from internet or running it after-hours if disruption would be unacceptable.
-> On macOS, `install.sh` should normally be run as your regular user, while `lss-network-tools.sh` may still be run with elevated privileges when needed for certain scans.
 
 ## Output
 
 ### JSON scan output
 
-Each run creates a folder inside:
+Each run creates a folder inside the installed output location:
 
 ```text
-output/
+macOS: /usr/local/share/lss-network-tools/output/
+Linux: /var/lib/lss-network-tools/output/
 ```
 
 Run folder format:

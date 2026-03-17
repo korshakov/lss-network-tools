@@ -3,87 +3,77 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_NAME="lss-network-tools"
+APP_SCRIPT="lss-network-tools.sh"
 OS=""
-PKG_PREFIX=()
-ALLOW_BREW=1
+APP_TARGET_DIR="${LSS_INSTALL_APP_DIR:-}"
+DATA_TARGET_DIR="${LSS_INSTALL_DATA_DIR:-}"
+WRAPPER_PATH="${LSS_INSTALL_WRAPPER_PATH:-/usr/local/bin/${APP_NAME}}"
+BREW_USER=""
 
 log() {
   echo "[install] $*"
 }
 
+fail() {
+  echo "[install] ERROR: $*" >&2
+  exit 1
+}
+
 detect_os() {
   case "$(uname -s)" in
-    Darwin) OS="macos" ;;
-    Linux) OS="linux" ;;
+    Darwin)
+      OS="macos"
+      APP_TARGET_DIR="${APP_TARGET_DIR:-/usr/local/share/${APP_NAME}}"
+      DATA_TARGET_DIR="${DATA_TARGET_DIR:-$APP_TARGET_DIR}"
+      ;;
+    Linux)
+      OS="linux"
+      APP_TARGET_DIR="${APP_TARGET_DIR:-/usr/local/lib/${APP_NAME}}"
+      DATA_TARGET_DIR="${DATA_TARGET_DIR:-/var/lib/${APP_NAME}}"
+      ;;
     *)
-      echo "Unsupported platform: $(uname -s)"
-      exit 1
+      fail "Unsupported platform: $(uname -s)"
       ;;
   esac
 }
 
-warn_about_root_usage() {
-  if [[ "$OS" == "macos" && "$EUID" -eq 0 ]]; then
-    log "Running install.sh as root on macOS is not recommended."
-    log "Homebrew actions will be skipped. Re-run install.sh as your normal user if you need packages installed via Homebrew."
-    log "If Homebrew asks for your password during installation, that is normal and does not mean you should run the entire installer with sudo."
-    ALLOW_BREW=0
+require_root() {
+  if [[ "$EUID" -ne 0 ]]; then
+    fail "Run install.sh with sudo or as root."
   fi
 }
 
-setup_package_prefix() {
-  if [[ "$EUID" -eq 0 ]]; then
-    PKG_PREFIX=()
-  elif command -v sudo >/dev/null 2>&1; then
-    PKG_PREFIX=(sudo)
-  else
-    PKG_PREFIX=()
+detect_brew_user() {
+  if [[ "$OS" == "macos" && -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+    BREW_USER="$SUDO_USER"
   fi
 }
 
-ensure_brew_shellenv() {
-  if [[ -x "/opt/homebrew/bin/brew" ]]; then
-    eval "$(/opt/homebrew/bin/brew shellenv)"
-  elif [[ -x "/usr/local/bin/brew" ]]; then
-    eval "$(/usr/local/bin/brew shellenv)"
-  elif [[ -x "/home/linuxbrew/.linuxbrew/bin/brew" ]]; then
-    eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+run_brew_as_user() {
+  local command_string="$1"
+
+  if [[ -z "$BREW_USER" ]]; then
+    fail "Homebrew actions on macOS require running install.sh with sudo from a normal admin user."
   fi
+
+  sudo -u "$BREW_USER" bash -lc "$command_string"
 }
 
-install_homebrew() {
-  if [[ "$ALLOW_BREW" -eq 0 ]]; then
-    return
+ensure_homebrew() {
+  if [[ "$OS" != "macos" ]]; then
+    return 0
   fi
 
-  if [[ "$OS" == "linux" && "$EUID" -eq 0 ]]; then
-    log "Running as root on Linux. Skipping Homebrew bootstrap and using system packages when available."
-    return
+  if sudo -u "$BREW_USER" bash -lc 'command -v brew >/dev/null 2>&1'; then
+    return 0
   fi
 
-  if command -v brew >/dev/null 2>&1; then
-    ensure_brew_shellenv
-    return
-  fi
+  log "Homebrew not found. Installing Homebrew for ${BREW_USER}..."
+  run_brew_as_user 'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
 
-  log "Homebrew not found. Installing Homebrew..."
-  if [[ "$OS" == "macos" ]]; then
-    log "Run this installer as your normal user on macOS. Homebrew may ask for your password, but do not run ./install.sh with sudo just for that."
-  fi
-
-  if [[ "$OS" == "linux" ]]; then
-    if ! command -v curl >/dev/null 2>&1; then
-      "${PKG_PREFIX[@]}" apt-get update
-      "${PKG_PREFIX[@]}" apt-get install -y curl
-    fi
-  fi
-
-  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-  ensure_brew_shellenv
-
-  if ! command -v brew >/dev/null 2>&1; then
-    echo "Homebrew installation failed. Please install Homebrew manually and re-run ./install.sh"
-    exit 1
+  if ! sudo -u "$BREW_USER" bash -lc 'command -v brew >/dev/null 2>&1'; then
+    fail "Homebrew installation failed."
   fi
 }
 
@@ -91,183 +81,141 @@ brew_install_if_missing() {
   local command_name="$1"
   local formula="$2"
 
-  if command -v "$command_name" >/dev/null 2>&1; then
+  if sudo -u "$BREW_USER" bash -lc "command -v $command_name >/dev/null 2>&1"; then
     log "[OK] $command_name"
-    return
+    return 0
   fi
 
   log "Installing $formula for missing command: $command_name"
-  brew install "$formula"
+  run_brew_as_user "brew install $formula"
+}
 
-  if command -v "$command_name" >/dev/null 2>&1; then
-    log "[OK] $command_name installed via $formula"
+install_linux_dependencies() {
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update
+    apt-get install -y nmap jq iproute2 iputils-ping tcpdump net-tools speedtest-cli zip unzip
+    return 0
+  fi
+
+  if command -v dnf >/dev/null 2>&1; then
+    dnf install -y nmap jq iproute iputils tcpdump net-tools speedtest-cli zip unzip
+    return 0
+  fi
+
+  fail "No supported Linux package manager found. Expected apt-get or dnf."
+}
+
+install_macos_dependencies() {
+  detect_brew_user
+  ensure_homebrew
+
+  brew_install_if_missing nmap nmap
+  brew_install_if_missing jq jq
+  brew_install_if_missing speedtest-cli speedtest-cli
+  brew_install_if_missing tcpdump tcpdump
+
+  log "[OK] ipconfig"
+  log "[OK] ifconfig"
+  log "[OK] route"
+  log "[OK] networksetup"
+  log "[OK] ping"
+  log "[OK] zip"
+}
+
+install_dependencies() {
+  if [[ "${LSS_SKIP_DEPS:-0}" == "1" ]]; then
+    log "Skipping dependency installation because LSS_SKIP_DEPS=1"
+    return 0
+  fi
+
+  log "Installing required dependencies..."
+
+  if [[ "$OS" == "macos" ]]; then
+    install_macos_dependencies
   else
-    log "[WARN] $command_name still not found after installing $formula"
+    install_linux_dependencies
   fi
 }
 
-brew_install_first_available() {
-  local command_name="$1"
-  shift
-  local formula
-
-  if command -v "$command_name" >/dev/null 2>&1; then
-    log "[OK] $command_name"
-    return
-  fi
-
-  for formula in "$@"; do
-    if brew info --formula "$formula" >/dev/null 2>&1; then
-      log "Installing $formula for missing command: $command_name"
-      brew install "$formula"
-      break
-    fi
-  done
-
-  if command -v "$command_name" >/dev/null 2>&1; then
-    log "[OK] $command_name installed"
-  else
-    log "[WARN] $command_name is still missing after attempted installs: $*"
-  fi
-}
-
-install_required_tools() {
-  if [[ "$ALLOW_BREW" -eq 1 ]] && command -v brew >/dev/null 2>&1; then
-    brew update
-  fi
-
-  if [[ "$ALLOW_BREW" -eq 1 ]] && command -v brew >/dev/null 2>&1; then
-    brew_install_if_missing nmap nmap
-    brew_install_if_missing awk gawk
-    brew_install_if_missing sed gnu-sed
-    brew_install_if_missing grep grep
-    brew_install_if_missing find findutils
-    brew_install_if_missing mktemp coreutils
-    brew_install_if_missing tcpdump tcpdump
-    if [[ "$OS" == "linux" ]]; then
-      brew_install_first_available ping iputils inetutils
-    fi
-  fi
+prepare_target_directories() {
+  mkdir -p "$APP_TARGET_DIR"
 
   if [[ "$OS" == "linux" ]]; then
-    if [[ "$ALLOW_BREW" -eq 1 ]] && command -v brew >/dev/null 2>&1; then
-      brew_install_first_available ip iproute2 iproute2mac
-      brew_install_first_available route net-tools
-    fi
-
-    if command -v apt-get >/dev/null 2>&1; then
-      if ! command -v nmap >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1 || ! command -v ip >/dev/null 2>&1 || ! command -v ping >/dev/null 2>&1 || ! command -v tcpdump >/dev/null 2>&1; then
-        "${PKG_PREFIX[@]}" apt-get update
-      fi
-      command -v nmap >/dev/null 2>&1 || "${PKG_PREFIX[@]}" apt-get install -y nmap
-      command -v jq >/dev/null 2>&1 || "${PKG_PREFIX[@]}" apt-get install -y jq
-      command -v ip >/dev/null 2>&1 || "${PKG_PREFIX[@]}" apt-get install -y iproute2
-      command -v ping >/dev/null 2>&1 || "${PKG_PREFIX[@]}" apt-get install -y iputils-ping
-      command -v tcpdump >/dev/null 2>&1 || "${PKG_PREFIX[@]}" apt-get install -y tcpdump
-      if ! command -v route >/dev/null 2>&1 && ! command -v ifconfig >/dev/null 2>&1; then
-        "${PKG_PREFIX[@]}" apt-get install -y net-tools
-      fi
-    elif command -v dnf >/dev/null 2>&1; then
-      command -v nmap >/dev/null 2>&1 || "${PKG_PREFIX[@]}" dnf install -y nmap
-      command -v jq >/dev/null 2>&1 || "${PKG_PREFIX[@]}" dnf install -y jq
-      command -v ip >/dev/null 2>&1 || "${PKG_PREFIX[@]}" dnf install -y iproute
-      command -v ping >/dev/null 2>&1 || "${PKG_PREFIX[@]}" dnf install -y iputils
-      command -v tcpdump >/dev/null 2>&1 || "${PKG_PREFIX[@]}" dnf install -y tcpdump
-      if ! command -v route >/dev/null 2>&1 && ! command -v ifconfig >/dev/null 2>&1; then
-        "${PKG_PREFIX[@]}" dnf install -y net-tools
-      fi
-    fi
-  fi
-
-  if [[ "$OS" == "macos" ]]; then
-    local mac_cmd
-    for mac_cmd in ipconfig ifconfig route networksetup; do
-      if command -v "$mac_cmd" >/dev/null 2>&1; then
-        log "[OK] $mac_cmd"
-      else
-        log "[WARN] macOS system command missing: $mac_cmd"
-      fi
-    done
+    mkdir -p "$DATA_TARGET_DIR/output" "$DATA_TARGET_DIR/raw" "$DATA_TARGET_DIR/tmp"
+  else
+    mkdir -p "$APP_TARGET_DIR/output" "$APP_TARGET_DIR/raw" "$APP_TARGET_DIR/tmp"
   fi
 }
 
-install_speedtest_cli() {
-  if command -v speedtest-cli >/dev/null 2>&1; then
-    log "[OK] speedtest-cli"
-    return
-  fi
+deploy_application_files() {
+  local source_file=""
+  local target_file=""
 
-  log "Installing speedtest-cli"
+  log "Deploying application files to $APP_TARGET_DIR"
 
-  if [[ "$OS" == "macos" ]]; then
-    if [[ "$ALLOW_BREW" -eq 1 ]] && command -v brew >/dev/null 2>&1; then
-      brew install speedtest-cli
-    else
-      log "[WARN] speedtest-cli installation on macOS requires Homebrew. Re-run install.sh as a normal user if Homebrew installation is needed."
-      return
-    fi
-  elif [[ "$OS" == "linux" ]]; then
-    if command -v apt-get >/dev/null 2>&1; then
-      "${PKG_PREFIX[@]}" apt-get update
-      "${PKG_PREFIX[@]}" apt-get install -y speedtest-cli
-    elif command -v dnf >/dev/null 2>&1; then
-      "${PKG_PREFIX[@]}" dnf install -y speedtest-cli
-    elif command -v brew >/dev/null 2>&1; then
-      brew install speedtest-cli
-    else
-      log "[WARN] No supported package manager found (apt-get, dnf, or brew) for speedtest-cli installation"
-      return
-    fi
-  fi
-
-  if command -v speedtest-cli >/dev/null 2>&1; then
-    log "[OK] speedtest-cli"
+  source_file="$SCRIPT_DIR/$APP_SCRIPT"
+  target_file="$APP_TARGET_DIR/$APP_SCRIPT"
+  if [[ "$source_file" != "$target_file" ]]; then
+    install -m 755 "$source_file" "$target_file"
   else
-    log "[WARN] speedtest-cli is still missing after installation attempt"
+    chmod 755 "$target_file"
   fi
+
+  source_file="$SCRIPT_DIR/install.sh"
+  target_file="$APP_TARGET_DIR/install.sh"
+  if [[ "$source_file" != "$target_file" ]]; then
+    install -m 755 "$source_file" "$target_file"
+  else
+    chmod 755 "$target_file"
+  fi
+
+  if [[ -f "$SCRIPT_DIR/README.md" ]]; then
+    source_file="$SCRIPT_DIR/README.md"
+    target_file="$APP_TARGET_DIR/README.md"
+    if [[ "$source_file" != "$target_file" ]]; then
+      install -m 644 "$source_file" "$target_file"
+    fi
+  fi
+
+  cat > "$APP_TARGET_DIR/install.env" <<EOF
+APP_ROOT="$APP_TARGET_DIR"
+DATA_ROOT="$DATA_TARGET_DIR"
+INSTALL_WRAPPER_PATH="$WRAPPER_PATH"
+EOF
+  chmod 644 "$APP_TARGET_DIR/install.env"
 }
 
-maybe_normalize_install_dir_name() {
-  local current_dir="$SCRIPT_DIR"
-  local parent_dir=""
-  local current_name=""
-  local target_dir=""
+write_wrapper() {
+  log "Creating command wrapper at $WRAPPER_PATH"
 
-  parent_dir="$(dirname "$current_dir")"
-  current_name="$(basename "$current_dir")"
+  cat > "$WRAPPER_PATH" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec "$APP_TARGET_DIR/$APP_SCRIPT" "\$@"
+EOF
 
-  if [[ "$current_name" == "lss-network-tools" ]]; then
-    return 0
-  fi
+  chmod 755 "$WRAPPER_PATH"
+}
 
-  if [[ ! "$current_name" =~ ^lss-network-tools- ]]; then
-    return 0
-  fi
+print_install_summary() {
+  log "Installation complete."
+  log "Command: $WRAPPER_PATH"
+  log "App files: $APP_TARGET_DIR"
 
-  target_dir="$parent_dir/lss-network-tools"
-  if [[ -e "$target_dir" ]]; then
-    log "[WARN] Cannot rename install folder because $target_dir already exists."
-    return 0
-  fi
-
-  if mv "$current_dir" "$target_dir" 2>/dev/null; then
-    log "Install folder renamed to: $target_dir"
-    log "Run the tool from: $target_dir"
+  if [[ "$OS" == "linux" ]]; then
+    log "Data: $DATA_TARGET_DIR"
   else
-    log "[WARN] Could not rename install folder to $target_dir"
+    log "Data: $APP_TARGET_DIR/output"
   fi
+
+  log "Run: sudo ${APP_NAME}"
+  log "Uninstall later with: sudo ${APP_NAME} --uninstall"
 }
 
 detect_os
-warn_about_root_usage
-setup_package_prefix
-install_homebrew
-install_required_tools
-install_speedtest_cli
-
-mkdir -p "$SCRIPT_DIR/output"
-chmod +x "$SCRIPT_DIR/lss-network-tools.sh"
-
-log "Installation complete."
-log "Run: ./lss-network-tools.sh"
-maybe_normalize_install_dir_name
+require_root
+install_dependencies
+prepare_target_directories
+deploy_application_files
+write_wrapper
+print_install_summary
