@@ -769,6 +769,142 @@ delete_all_previous_runs() {
   echo "All previous runs have been deleted."
 }
 
+latest_local_tag() {
+  git for-each-ref --format '%(refname:strip=2)' refs/tags 2>/dev/null | sort -V | tail -n 1
+}
+
+latest_remote_tag() {
+  git ls-remote --tags --refs origin 2>/dev/null | awk -F/ '{print $NF}' | sort -V | tail -n 1
+}
+
+remote_origin_url() {
+  git remote get-url origin 2>/dev/null || true
+}
+
+print_private_repo_auth_hint() {
+  local remote_url="$1"
+
+  echo "Authentication may be required to access the remote repository."
+  if [[ "$remote_url" == git@* || "$remote_url" == ssh://* ]]; then
+    echo "This repository appears to use SSH."
+    echo "Make sure the machine has an SSH key configured for your Git provider."
+  else
+    echo "This repository appears to use HTTPS."
+    echo "For private repositories, use your normal Git credential flow or consider switching origin to SSH for smoother updates."
+  fi
+}
+
+check_for_updates() {
+  local current_branch=""
+  local current_commit=""
+  local local_tag=""
+  local remote_tag=""
+  local dirty_worktree=false
+  local confirmation=""
+  local run_installer=""
+  local remote_url=""
+
+  echo
+  echo "Check For Updates"
+  echo "================="
+  echo
+
+  if ! command -v git >/dev/null 2>&1; then
+    echo "Git is required to check for updates."
+    return 1
+  fi
+
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "Updates require this tool to be run from a Git repository."
+    return 1
+  fi
+
+  if ! git remote get-url origin >/dev/null 2>&1; then
+    echo "No Git remote named origin is configured for this repository."
+    return 1
+  fi
+
+  remote_url="$(remote_origin_url)"
+  current_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")"
+  current_commit="$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
+  local_tag="$(latest_local_tag)"
+
+  if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+    dirty_worktree=true
+  fi
+
+  echo "Current Branch: ${current_branch}"
+  echo "Current Commit: ${current_commit}"
+  if [[ -n "$local_tag" ]]; then
+    echo "Current Version Tag: $local_tag"
+  else
+    echo "Current Version Tag: none"
+  fi
+  echo
+  echo "Checking remote tags..."
+
+  remote_tag="$(latest_remote_tag)"
+  if [[ -z "$remote_tag" ]]; then
+    if ! git ls-remote --tags --refs origin >/dev/null 2>&1; then
+      echo "Unable to read remote tags from origin."
+      print_private_repo_auth_hint "$remote_url"
+      return 1
+    fi
+    echo "No remote tags were found on origin."
+    echo "Publish your first tag after committing this feature, then this update check will become meaningful."
+    return 0
+  fi
+
+  echo "Latest Available Tag: $remote_tag"
+
+  if [[ "$dirty_worktree" == "true" ]]; then
+    echo
+    echo "Warning: Local uncommitted changes were detected."
+    echo "Updating is not recommended until your working tree is clean."
+    return 0
+  fi
+
+  if [[ -n "$local_tag" && "$local_tag" == "$remote_tag" ]]; then
+    echo
+    echo "This repository is already on the latest tagged version."
+    return 0
+  fi
+
+  echo
+  echo "An update is available."
+  read -r -p "Type UPDATE to fetch tags and pull the latest changes from origin/$current_branch: " confirmation
+
+  if [[ "$confirmation" != "UPDATE" ]]; then
+    echo "Update cancelled."
+    return 0
+  fi
+
+  if ! git fetch --tags origin; then
+    echo "Failed to fetch tags from origin."
+    print_private_repo_auth_hint "$remote_url"
+    return 1
+  fi
+
+  if ! git pull --ff-only origin "$current_branch"; then
+    echo "Failed to pull the latest changes from origin/$current_branch."
+    print_private_repo_auth_hint "$remote_url"
+    return 1
+  fi
+
+  echo
+  echo "Repository updated successfully."
+  echo "Current Version Tag: $(latest_local_tag)"
+  echo
+  read -r -p "Would you like to run install.sh now to refresh dependencies if needed? (y/N): " run_installer
+  if [[ "$run_installer" =~ ^[Yy]$ ]]; then
+    if [[ -x "./install.sh" ]]; then
+      ./install.sh
+    else
+      bash ./install.sh
+    fi
+  fi
+}
+
 startup_menu() {
   local choice=""
   local yellow='\033[1;33m'
@@ -782,7 +918,8 @@ startup_menu() {
     echo "1) Run LSS Network Tools"
     echo "2) Build LSS Network Tools Report From Previous Run"
     echo "3) Delete All Previous Runs"
-    echo "4) Exit"
+    echo "4) Check For Updates"
+    echo "5) Exit"
     echo
 
     read -r -p "Choose option: " choice
@@ -801,7 +938,13 @@ startup_menu() {
         echo
         read -r -p "Press Enter to return to the startup menu..." _
         ;;
-      4) exit 0 ;;
+      4)
+        clear_screen_if_supported
+        check_for_updates
+        echo
+        read -r -p "Press Enter to return to the startup menu..." _
+        ;;
+      5) exit 0 ;;
       *)
         echo "Invalid selection. Try again."
         sleep 1
