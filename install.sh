@@ -10,6 +10,7 @@ APP_TARGET_DIR="${LSS_INSTALL_APP_DIR:-}"
 DATA_TARGET_DIR="${LSS_INSTALL_DATA_DIR:-}"
 WRAPPER_PATH="${LSS_INSTALL_WRAPPER_PATH:-/usr/local/bin/${APP_NAME}}"
 BREW_USER=""
+BREW_BIN=""
 
 log() {
   echo "[install] $*"
@@ -50,14 +51,32 @@ detect_brew_user() {
   fi
 }
 
-run_brew_as_user() {
+detect_brew_binary() {
+  if command -v brew >/dev/null 2>&1; then
+    BREW_BIN="$(command -v brew)"
+  elif [[ -x /opt/homebrew/bin/brew ]]; then
+    BREW_BIN="/opt/homebrew/bin/brew"
+  elif [[ -x /usr/local/bin/brew ]]; then
+    BREW_BIN="/usr/local/bin/brew"
+  else
+    BREW_BIN=""
+  fi
+}
+
+run_macos_user_shell() {
   local command_string="$1"
+  local user_home=""
+  local brew_path=""
 
   if [[ -z "$BREW_USER" ]]; then
-    fail "Homebrew actions on macOS require running install.sh with sudo from a normal admin user."
+    return 1
   fi
 
-  sudo -u "$BREW_USER" bash -lc "$command_string"
+  user_home="$(dscl . -read "/Users/$BREW_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+  [[ -z "$user_home" ]] && user_home="/Users/$BREW_USER"
+
+  brew_path="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  sudo -u "$BREW_USER" env HOME="$user_home" PATH="$brew_path" bash --noprofile --norc -lc "$command_string"
 }
 
 ensure_homebrew() {
@@ -65,14 +84,20 @@ ensure_homebrew() {
     return 0
   fi
 
-  if sudo -u "$BREW_USER" bash -lc 'command -v brew >/dev/null 2>&1'; then
+  detect_brew_binary
+  if [[ -n "$BREW_BIN" ]]; then
     return 0
   fi
 
-  log "Homebrew not found. Installing Homebrew for ${BREW_USER}..."
-  run_brew_as_user 'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+  if [[ -z "$BREW_USER" ]]; then
+    fail "Homebrew is not installed. On macOS, run install.sh from your normal admin user with sudo so Homebrew can be installed if needed."
+  fi
 
-  if ! sudo -u "$BREW_USER" bash -lc 'command -v brew >/dev/null 2>&1'; then
+  log "Homebrew not found. Installing Homebrew for ${BREW_USER}..."
+  run_macos_user_shell 'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+
+  detect_brew_binary
+  if [[ -z "$BREW_BIN" ]]; then
     fail "Homebrew installation failed."
   fi
 }
@@ -81,13 +106,17 @@ brew_install_if_missing() {
   local command_name="$1"
   local formula="$2"
 
-  if sudo -u "$BREW_USER" bash -lc "command -v $command_name >/dev/null 2>&1"; then
+  if command -v "$command_name" >/dev/null 2>&1; then
     log "[OK] $command_name"
     return 0
   fi
 
+  if [[ -z "$BREW_USER" ]]; then
+    fail "Missing required tool '$command_name'. On macOS, rerun install.sh from your normal admin user with sudo so Homebrew can install missing packages."
+  fi
+
   log "Installing $formula for missing command: $command_name"
-  run_brew_as_user "brew install $formula"
+  run_macos_user_shell "\"$BREW_BIN\" install $formula"
 }
 
 install_linux_dependencies() {

@@ -123,6 +123,7 @@ sudo ./install.sh
   - macOS: `nmap`, `jq`, `speedtest-cli`, `tcpdump`
   - Linux: `nmap`, `jq`, `iproute2`, `iputils-ping`, `tcpdump`, `net-tools`, `speedtest-cli`, `zip`, `unzip`
   - macOS system tools expected to already exist: `ipconfig`, `ifconfig`, `route`, `networksetup`, `ping`, `zip`
+- On macOS, if Homebrew is missing, run the installer from your normal admin user with `sudo` so Homebrew can be installed cleanly
 - Deploy the application command to `/usr/local/bin/lss-network-tools`
 - Deploy application files to:
   - macOS: `/usr/local/share/lss-network-tools`
