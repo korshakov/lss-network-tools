@@ -123,6 +123,7 @@ sudo ./install.sh
 
 - Detect OS (macOS/Linux)
 - Require `sudo` / root
+- Check whether the downloaded copy matches the latest published GitHub tag before changing the machine
 - Install required dependencies
   - macOS: `nmap`, `jq`, `speedtest-cli`, `tcpdump`
   - Linux: `nmap`, `jq`, `iproute2`, `iputils-ping`, `tcpdump`, `net-tools`, `speedtest-cli`, `zip`, `unzip`

@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
 APP_SCRIPT="lss-network-tools.sh"
+APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 OS=""
 APP_TARGET_DIR="${LSS_INSTALL_APP_DIR:-}"
 DATA_TARGET_DIR="${LSS_INSTALL_DATA_DIR:-}"
@@ -32,6 +33,64 @@ append_install_audit_log() {
 fail() {
   echo "[install] ERROR: $*" >&2
   exit 1
+}
+
+get_local_app_version() {
+  awk -F'"' '/^APP_VERSION=/{print $2; exit}' "$SCRIPT_DIR/$APP_SCRIPT" 2>/dev/null || true
+}
+
+latest_remote_tag_from_github() {
+  local api_url="https://api.github.com/repos/${APP_GITHUB_REPO}/tags?per_page=100"
+  local response=""
+
+  if ! command -v curl >/dev/null 2>&1; then
+    return 1
+  fi
+
+  if ! response="$(curl -fsSL "$api_url" 2>/dev/null)"; then
+    return 1
+  fi
+
+  printf '%s\n' "$response" | grep -o '"name":[[:space:]]*"[^"]*"' | sed 's/.*"name":[[:space:]]*"\([^"]*\)"/\1/' | sort -V | tail -n 1
+}
+
+check_source_version_freshness() {
+  local local_version=""
+  local remote_tag=""
+  local choice=""
+
+  local_version="$(get_local_app_version)"
+  if [[ -z "$local_version" ]]; then
+    log "[WARN] Could not determine local APP_VERSION before install."
+    return 0
+  fi
+
+  log "Checking whether this downloaded copy is current..."
+  remote_tag="$(latest_remote_tag_from_github || true)"
+
+  if [[ -z "$remote_tag" ]]; then
+    log "[WARN] Could not read the latest GitHub tag. Continuing with the local copy."
+    return 0
+  fi
+
+  log "Local version: $local_version"
+  log "Latest available tag: $remote_tag"
+
+  if [[ "$local_version" == "$remote_tag" ]]; then
+    log "[OK] This installer matches the latest published version."
+    return 0
+  fi
+
+  echo
+  echo "[install] WARNING: This downloaded copy is not the latest published version."
+  echo "[install] Installing an older copy can reintroduce bugs that were already fixed."
+  echo "[install] Download the latest release if you want the safest path."
+  echo
+  read -r -p "Type CONTINUE to install this older copy anyway, or press Enter to cancel: " choice
+
+  if [[ "$choice" != "CONTINUE" ]]; then
+    fail "Installation cancelled because the local copy is outdated."
+  fi
 }
 
 detect_os() {
@@ -267,6 +326,7 @@ print_install_summary() {
 
 detect_os
 require_root
+check_source_version_freshness
 install_dependencies
 prepare_target_directories
 deploy_application_files
