@@ -237,6 +237,7 @@ write_wrapper() {
   cat > "$WRAPPER_PATH" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin:\${PATH:-}"
 exec "$APP_TARGET_DIR/$APP_SCRIPT" "\$@"
 EOF
 
@@ -244,6 +245,9 @@ EOF
 }
 
 print_install_summary() {
+  local green='\033[0;32m'
+  local reset='\033[0m'
+
   log "Installation complete."
   log "Command: $WRAPPER_PATH"
   log "App files: $APP_TARGET_DIR"
@@ -254,10 +258,10 @@ print_install_summary() {
     log "Data: $APP_TARGET_DIR/output"
   fi
 
-  log "Run: sudo ${APP_NAME}"
-  log "Uninstall later with: sudo ${APP_NAME} --uninstall"
-  log "If command completion does not work immediately, open a new shell."
-  log "For zsh, you can also run: rehash && autoload -Uz compinit && compinit"
+  printf "${green}[install] Run: sudo %s${reset}\n" "$APP_NAME"
+  printf "${green}[install] Uninstall later with: sudo %s --uninstall${reset}\n" "$APP_NAME"
+  printf "${green}[install] If command completion does not work immediately, open a new shell.${reset}\n"
+  printf "${green}[install] For zsh, you can also run: rehash && autoload -Uz compinit && compinit${reset}\n"
   append_install_audit_log "install" "success" "Application deployed to ${APP_TARGET_DIR}"
 }
 

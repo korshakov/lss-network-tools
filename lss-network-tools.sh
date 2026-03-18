@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.13"
+APP_VERSION="v1.0.14"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -51,6 +51,26 @@ TASKS
 
 print_alert() {
   echo "ALERT: $1"
+}
+
+ensure_standard_path() {
+  local extra_paths=()
+  local path_entry=""
+
+  if [[ "$OS" == "macos" ]]; then
+    extra_paths=(/opt/homebrew/bin /opt/homebrew/sbin /usr/local/bin /usr/local/sbin /usr/bin /bin /usr/sbin /sbin)
+  else
+    extra_paths=(/usr/local/bin /usr/local/sbin /usr/bin /bin /usr/sbin /sbin)
+  fi
+
+  for path_entry in "${extra_paths[@]}"; do
+    case ":$PATH:" in
+      *":$path_entry:"*) ;;
+      *) PATH="$path_entry:$PATH" ;;
+    esac
+  done
+
+  export PATH
 }
 
 configure_runtime_paths() {
@@ -6022,6 +6042,7 @@ if [[ "$VERSION_MODE" -eq 1 ]]; then
   exit 0
 fi
 detect_os
+ensure_standard_path
 configure_runtime_paths
 ensure_runtime_directories
 if [[ "$UNINSTALL_MODE" -eq 1 ]]; then
