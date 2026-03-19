@@ -80,25 +80,13 @@ class Report(FPDF):
         self.rect(0, 0, 210, 70, "F")
 
         # Logo -- top-right inside the bar
-        # Try each candidate in order: svg, png, jpg, then text fallback
         logo_rendered = False
-        assets_dir = os.path.dirname(self.logo_path) if self.logo_path else None
-        logo_candidates = []
-        if self.logo_path:
-            logo_candidates.append(self.logo_path)
-        if assets_dir:
-            for fname in os.listdir(assets_dir) if assets_dir and os.path.isdir(assets_dir) else []:
-                if fname.lower().endswith((".png", ".jpg", ".jpeg")) and fname != ".gitkeep":
-                    logo_candidates.append(os.path.join(assets_dir, fname))
-        for candidate in logo_candidates:
-            if not os.path.exists(candidate):
-                continue
+        if self.logo_path and os.path.exists(self.logo_path):
             try:
-                self.image(candidate, x=152, y=5, w=48, h=48)
+                self.image(self.logo_path, x=152, y=5, w=48, h=48)
                 logo_rendered = True
-                break
             except Exception:
-                continue
+                pass
         if not logo_rendered:
             self.set_font("Helvetica", "B", 22)
             self.set_text_color(*C_WHT)
