@@ -1,0 +1,74 @@
+# LSS Network Tools — Roadmap
+
+## In Progress / Recently Shipped
+
+- **v1.0.18** — Task 12: VLAN/Trunk Detection (802.1Q passive capture, CDP/LLDP neighbour parsing via scapy)
+
+---
+
+## High Value / Low Effort
+
+### PDF Report Output
+Convert the existing `.txt` report to PDF using `pandoc`. No structural changes to report generation needed — clients expect a PDF deliverable.
+
+### Task 15: Wireless Scan
+Capture wireless environment data on the selected interface.
+- SSIDs/BSSIDs in range
+- Signal strength and channel
+- Security mode (Open/WPA2/WPA3)
+- Channel congestion (competing APs on same channel)
+- Tools: `airport` (macOS), `iw`/`iwlist` (Linux)
+
+### Stress Test Latency Visualisation
+Render an ASCII chart of latency over time across the 7 stress stages using `awk` — no new dependencies. Makes the stress test section of the report far more compelling for client presentation.
+
+---
+
+## Medium Value / Medium Effort
+
+### ARP Table Dump + Conflict Detection
+Capture the full ARP table at run start using `arp -a` / `ip neigh`. Flag duplicate IPs mapped to different MACs — a sign of ARP poisoning or misconfigured static IPs. No new dependencies.
+
+### Port Scan Remediation Context (Task 10)
+Add a built-in lookup table of common ports with risk context. Example: port 23 = Telnet = unencrypted remote access (high risk), port 512 = rexec = high risk. Makes the custom port scan report actionable without requiring auditor expertise on every port number.
+
+### Task 16: Traceroute
+Hop-by-hop path to the gateway and to a public IP (e.g. 1.1.1.1). Useful for diagnosing unexpected routing paths, extra hops, or traffic leaving the network through an unintended exit point. Tools: `traceroute` (macOS/Linux), `tracepath` (Linux fallback).
+
+### Task 17: NTP / Time Sync Check
+Scan for NTP servers on the local network (port 123). Test whether the local clock is synchronised. Out-of-sync clocks cause certificate errors, AD authentication failures, and log correlation issues — common in SME environments.
+
+---
+
+## Longer Term / Bigger Impact
+
+### Headless / Unattended Mode (`--headless`)
+Accept client name, location, and interface via CLI arguments or a config file. Run the full audit non-interactively. Enables cron scheduling, remote triggering, and overnight baseline captures.
+
+### HTML Report
+Standalone HTML report alongside TXT/PDF. Features: collapsible sections, colour-coded severity badges, embedded latency chart for stress test stages. Shareable without a PDF viewer.
+
+### Comparative Runs
+Compare a run against the previous run for the same client/location. Flag: new open ports, new hosts discovered, gateway changes, degraded stress test results. Requires JSON diffing between run folders — minimal new logic, high auditor value for recurring clients.
+
+---
+
+## Quick Wins
+
+| Item | Description |
+|------|-------------|
+| `--list-runs` flag | Print all saved runs as a table (client, location, date, tasks completed) without launching the interactive menu |
+| Run notes field | Free-text note prompt at run start ("pre-migration baseline", "post-incident check") stored in manifest.json and shown in the report header |
+| Manifest integrity check | Detect missing or corrupt JSON files before building a report; show a clear summary of what is present vs absent |
+
+---
+
+## Completed
+
+| Version | Feature |
+|---------|---------|
+| v1.0.18 | Task 12: VLAN/Trunk Detection |
+| v1.0.17 | Bug fixes: SELECTED_INTERFACE init, remote_tag guard, indentation, task 12 comment |
+| v1.0.16 | Installer self-refresh for outdated bundles, installer version freshness check |
+| v1.0.14 | Fix Homebrew PATH under sudo |
+| v1.0.13 | Homebrew bootstrap adjustment |
