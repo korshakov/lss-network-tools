@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.21"
+APP_VERSION="v1.0.22"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -1365,6 +1365,9 @@ build_report_from_previous_run() {
     return 1
   fi
 
+  echo "TXT report:    $RUN_REPORT_FILE"
+  generate_pdf_report || true
+
   RUN_OUTPUT_DIR="$previous_output_dir"
   RUN_REPORT_FILE="$previous_report_file"
   RUN_DEBUG_LOG="$previous_debug_log"
@@ -1770,6 +1773,7 @@ write_manifest_for_current_run() {
 
 generate_pdf_report() {
   local py_script="$APP_ROOT/generate_pdf_report.py"
+  local pdf_path="${RUN_REPORT_FILE%.txt}.pdf"
   local pdf_out
 
   if [[ -z "$RUN_OUTPUT_DIR" ]]; then
@@ -1779,6 +1783,7 @@ generate_pdf_report() {
     return 0
   fi
   if ! python3 -c "import fpdf" 2>/dev/null; then
+    echo "PDF generation skipped: fpdf2 not installed (pip3 install fpdf2)"
     return 0
   fi
   if [[ ! -f "$py_script" ]]; then
@@ -1789,9 +1794,11 @@ generate_pdf_report() {
   fi
 
   echo "Generating PDF report..."
-  pdf_out="$(python3 "$py_script" "$RUN_OUTPUT_DIR" "$APP_ROOT" 2>/dev/null || true)"
+  pdf_out="$(python3 "$py_script" "$RUN_OUTPUT_DIR" "$APP_ROOT" "$pdf_path" 2>&1 || true)"
   if [[ -n "$pdf_out" && -f "$pdf_out" ]]; then
-    echo "PDF report: $(basename "$pdf_out")"
+    echo "PDF report:    $pdf_out"
+  else
+    echo "PDF generation failed: $pdf_out"
   fi
 }
 
@@ -1806,7 +1813,6 @@ finalize_run() {
 
   if [[ -n "$RUN_OUTPUT_DIR" ]]; then
     write_manifest_for_current_run || true
-    generate_pdf_report || true
   fi
 
   if [[ -n "$SESSION_DEBUG_LOG" && -f "$SESSION_DEBUG_LOG" ]]; then

@@ -428,6 +428,7 @@ def main():
 
     run_dir  = Path(sys.argv[1])
     app_root = Path(sys.argv[2])
+    pdf_path_override = Path(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] else None
     logo     = app_root / "assets" / "logo.svg"
 
     manifest        = load_json(run_dir / "manifest.json")        or {}
@@ -497,12 +498,15 @@ def main():
         if d := load_json(p): render_custom_dns_assessment(pdf, d, i)
 
     # ── Output path ────────────────────────────────────────────────────────
-    report_txt = manifest.get("report_file", "")
-    if report_txt:
-        pdf_path = run_dir / (Path(report_txt).stem + ".pdf")
+    if pdf_path_override:
+        pdf_path = pdf_path_override
     else:
-        def slug(s): return s.lower().replace(" ", "-")
-        pdf_path = run_dir / f"lss-network-tools-report-{slug(client)}-{slug(location)}.pdf"
+        report_txt = manifest.get("report_file", "")
+        if report_txt:
+            pdf_path = run_dir / (Path(report_txt).stem + ".pdf")
+        else:
+            def slug(s): return s.lower().replace(" ", "-")
+            pdf_path = run_dir / f"lss-network-tools-report-{slug(client)}-{slug(location)}.pdf"
 
     pdf.output(str(pdf_path))
     print(str(pdf_path))
