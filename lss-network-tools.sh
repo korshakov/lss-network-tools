@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.28"
+APP_VERSION="v1.0.29"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -616,10 +616,12 @@ perform_installed_update() {
       ! -name raw
       ! -name tmp
       ! -name install.env
+      ! -name assets
     )
   else
     preserve_find_args=(
       ! -name install.env
+      ! -name assets
     )
   fi
 
@@ -637,6 +639,14 @@ AUDIT_LOG_PATH="$(current_audit_log_path)"
 find "\$DEST_DIR" -mindepth 1 -maxdepth 1 ${preserve_find_args[*]} -exec rm -rf {} +
 cp -R "\$SOURCE_ROOT"/. "\$DEST_DIR"/
 chmod +x "\$DEST_DIR"/*.sh 2>/dev/null || true
+# Merge new bundle assets without overwriting user-placed files (e.g. logo.svg)
+if [[ -d "\$SOURCE_ROOT/assets" ]]; then
+  mkdir -p "\$DEST_DIR/assets"
+  find "\$SOURCE_ROOT/assets" -maxdepth 1 -type f | while read -r src_file; do
+    dest_file="\$DEST_DIR/assets/\$(basename "\$src_file")"
+    [[ -f "\$dest_file" ]] || cp "\$src_file" "\$dest_file"
+  done
+fi
 REPORTED_VERSION="\$(bash "\$SCRIPT_PATH" --version 2>/dev/null || true)"
 mkdir -p "\$(dirname "\$AUDIT_LOG_PATH")"
 if [[ "\$REPORTED_VERSION" != "${APP_NAME} $remote_tag" ]]; then
