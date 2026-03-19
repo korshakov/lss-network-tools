@@ -83,7 +83,7 @@ class Report(FPDF):
         logo_rendered = False
         if self.logo_path and os.path.exists(self.logo_path):
             try:
-                self.image(self.logo_path, x=152, y=5, w=48, h=48)
+                self.image(self.logo_path, x=152, y=5, w=48)
                 logo_rendered = True
             except Exception:
                 pass
