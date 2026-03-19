@@ -252,12 +252,13 @@ def render_interface_info(pdf, data):
 
 def render_speed_test(pdf, data):
     pdf.subsection_title("2. Internet Speed Test")
-    ping  = data.get("ping_ms")
-    dl    = data.get("download_mbps")
-    ul    = data.get("upload_mbps")
+    srv   = (data.get("servers") or [{}])[0]
+    ping  = srv.get("ping_ms")
+    dl    = srv.get("download_mbps")
+    ul    = srv.get("upload_mbps")
     for i, (k, v) in enumerate([
-        ("Public IP",   data.get("public_ip")),
-        ("Test Server", data.get("server_name")),
+        ("Public IP",   srv.get("public_ip") or data.get("public_ip")),
+        ("Test Server", srv.get("test_server") or srv.get("server_name")),
         ("Ping",        f"{ping} ms"   if ping is not None else "unknown"),
         ("Download",    f"{dl} Mbps"   if dl   is not None else "unknown"),
         ("Upload",      f"{ul} Mbps"   if ul   is not None else "unknown"),
@@ -275,17 +276,39 @@ def render_gateway(pdf, data):
 
 def render_dhcp(pdf, data):
     pdf.subsection_title("4. DHCP Network Scan")
+    relay = ", ".join(data.get("relay_sources_seen") or []) or "none"
     for i, (k, v) in enumerate([
-        ("Discovery Attempts",  data.get("discovery_attempts")),
-        ("Responders Observed", data.get("dhcp_responders_observed", 0)),
-        ("Offers Observed",     data.get("offers_observed", 0)),
-        ("Rogue DHCP Suspected",data.get("rogue_dhcp_suspected", False)),
+        ("Discovery Attempts",   data.get("discovery_attempts")),
+        ("Responders Observed",  data.get("dhcp_responders_observed", 0)),
+        ("Unique Offers",        data.get("offers_observed", 0)),
+        ("Raw Offers Captured",  data.get("raw_offers_observed", 0)),
+        ("Rogue DHCP Suspected", data.get("rogue_dhcp_suspected", False)),
+        ("Relay / Proxy Sources",relay),
     ]):
         pdf.kv(k, v, shade=i % 2 == 0)
     for ip in data.get("suspected_rogue_servers") or []:
         pdf.set_font("Helvetica", "", 8)
         pdf.set_text_color(*C_HGH)
         pdf.cell(0, 5, safe(f"  ! Suspected rogue responder: {ip}"), new_x="LMARGIN", new_y="NEXT")
+        pdf.set_text_color(*C_DGR)
+    servers = data.get("servers") or []
+    if servers:
+        pdf.ln(2)
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.cell(0, 5, f"  DHCP Responders ({len(servers)}):", new_x="LMARGIN", new_y="NEXT")
+        for srv in servers:
+            ports = ", ".join(str(p) for p in (srv.get("open_ports") or [])) or "none"
+            pdf.set_font("Helvetica", "", 7)
+            pdf.set_text_color(*C_MGR)
+            pdf.set_x(pdf.l_margin + 4)
+            pdf.multi_cell(
+                166, 4,
+                safe(f"{srv.get('ip','?')}  |  Class: {srv.get('classification','unknown')}"
+                     f"  |  Offers: {srv.get('offers_observed',0)}"
+                     f"  |  Rogue: {srv.get('suspected_rogue', False)}"
+                     f"  |  Ports: {ports}"),
+                new_x="LMARGIN", new_y="NEXT",
+            )
         pdf.set_text_color(*C_DGR)
 
 
@@ -310,30 +333,51 @@ def render_generic_scan(pdf, num, title, data):
 
 def render_stress_test(pdf, num, label, data):
     pdf.subsection_title(f"{num}. {label}")
-    target = data.get("target_ip") or data.get("gateway_ip", "unknown")
-    ind    = data.get("indicators") or {}
+    target     = data.get("target_ip") or data.get("gateway_ip", "unknown")
+    ind        = data.get("indicators") or {}
+    ss         = data.get("stage_status") or {}
+    baseline   = data.get("baseline")         or {}
+    jitter     = data.get("jitter_test")      or {}
+    large      = data.get("large_packet_test") or {}
+    sustained  = data.get("sustained_test")   or {}
+    recovery   = data.get("recovery")         or {}
+
+    base_avg = baseline.get("avg_latency_ms")
+    sust_avg = sustained.get("avg_latency_ms")
+
     for i, (k, v) in enumerate([
-        ("Target",             target),
-        ("High Jitter",        ind.get("high_jitter",        False)),
-        ("Latency Under Load", ind.get("latency_under_load", False)),
-        ("Packet Loss",        ind.get("packet_loss",        False)),
-        ("Slow Recovery",      ind.get("slow_recovery",      False)),
+        ("Target",              target),
+        ("Baseline Avg",        f"{base_avg} ms" if base_avg is not None else "unknown"),
+        ("Sustained Avg",       f"{sust_avg} ms" if sust_avg is not None else "unknown"),
+        ("High Jitter",         ind.get("high_jitter",        False)),
+        ("Latency Under Load",  ind.get("latency_under_load", False)),
+        ("Packet Loss",         ind.get("packet_loss",        False)),
+        ("Slow Recovery",       ind.get("slow_recovery",      False)),
     ]):
         pdf.kv(k, v, shade=i % 2 == 0)
-    stages = data.get("stages") or []
-    if stages:
-        pdf.ln(2)
-        pdf.set_font("Helvetica", "B", 8)
-        pdf.cell(0, 5, "  Stage Results:", new_x="LMARGIN", new_y="NEXT")
-        for s in stages:
-            pdf.set_font("Helvetica", "", 7)
-            pdf.set_text_color(*C_MGR)
-            pdf.cell(
-                0, 4,
-                safe(f"    {s.get('stage','?')}:  avg {s.get('avg_ms','?')} ms  |  loss {s.get('packet_loss_pct','?')}%"),
-                new_x="LMARGIN", new_y="NEXT",
-            )
-        pdf.set_text_color(*C_DGR)
+
+    # Stage breakdown
+    stage_rows = [
+        ("Baseline",     ss.get("baseline",    "?"), baseline.get("avg_latency_ms"),  None),
+        ("Jitter",       ss.get("jitter",      "?"), jitter.get("stddev_ms"),         jitter.get("packet_loss_percent")),
+        ("Large Packet", ss.get("large_packet","?"), large.get("avg_latency_ms"),     large.get("packet_loss_percent")),
+        ("Sustained",    ss.get("sustained",   "?"), sustained.get("avg_latency_ms"), sustained.get("packet_loss_percent")),
+        ("Recovery",     ss.get("recovery",    "?"), recovery.get("avg_latency_ms"),  None),
+    ]
+    pdf.ln(2)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.cell(0, 5, "  Stage Results:", new_x="LMARGIN", new_y="NEXT")
+    for (stage_name, status, avg, loss) in stage_rows:
+        avg_str  = f"{avg} ms" if avg  is not None else "n/a"
+        loss_str = f"  |  loss {loss}%" if loss is not None else ""
+        pdf.set_font("Helvetica", "", 7)
+        pdf.set_text_color(*C_MGR)
+        pdf.cell(
+            0, 4,
+            safe(f"    {stage_name}: {status}  |  avg {avg_str}{loss_str}"),
+            new_x="LMARGIN", new_y="NEXT",
+        )
+    pdf.set_text_color(*C_DGR)
 
 
 def render_vlan_trunk(pdf, data):
