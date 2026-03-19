@@ -2,6 +2,7 @@
 
 ## In Progress / Recently Shipped
 
+- **v1.0.40** — PDF prettification: tighter cover, stage table, colour-coded flags, hint accents
 - **v1.0.39** — Add --update CLI flag
 - **v1.0.38** — Reduce cover page metadata card line spacing
 - **v1.0.19** — PDF report output with cover page, logo, findings, remediation hints, and per-task sections
@@ -70,6 +71,7 @@ Compare a run against the previous run for the same client/location. Flag: new o
 
 | Version | Feature |
 |---------|---------|
+| v1.0.40 | PDF prettification: tighter cover, stage table, colour-coded flags, hint accents |
 | v1.0.39 | Add --update CLI flag |
 | v1.0.38 | Reduce cover page metadata card line spacing |
 | v1.0.29 | Preserve assets/ dir across updates; merge-only for new bundle assets |

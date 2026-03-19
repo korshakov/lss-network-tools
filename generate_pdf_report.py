@@ -116,19 +116,20 @@ class Report(FPDF):
             rows.append(("Prepared By", self.prepared_by))
         row_h   = 5
         row_gap = 7
+        card_top = 76
         card_h  = row_gap * len(rows) + 8
-        self.rect(20, 82, 170, card_h, "FD")
+        self.rect(20, card_top, 170, card_h, "FD")
         self.set_text_color(*C_DGR)
 
         for i, (k, v) in enumerate(rows):
-            y = 87 + i * row_gap
+            y = card_top + 5 + i * row_gap
             self.set_font("Helvetica", "B", 9)
             self.set_xy(28, y)
             self.cell(38, row_h, safe(k + ":"), align="L")
             self.set_font("Helvetica", "", 9)
             self.cell(0, row_h, safe(str(v)), align="L")
 
-        self.set_y(155)
+        self.set_y(card_top + card_h + 8)
         self._cover_done = True
 
     # ── Layout helpers ──────────────────────────────────────────────────────
@@ -186,14 +187,38 @@ class Report(FPDF):
     def hint_row(self, title, detail, shade=False):
         if shade:
             self.set_fill_color(*C_LGR)
+            self.cell(170, 5, safe(f"  {title}"), fill=True, new_x="LMARGIN", new_y="NEXT")
+        else:
+            # Accent bar on the left for unshaded rows
+            bar_y = self.get_y()
+            self.set_font("Helvetica", "B", 8)
+            self.cell(170, 5, safe(f"  {title}"), fill=False, new_x="LMARGIN", new_y="NEXT")
+            self.set_draw_color(*C_NAV)
+            self.set_line_width(0.6)
+            self.line(self.l_margin, bar_y, self.l_margin, bar_y + 5)
+            self.set_line_width(0.2)
         self.set_font("Helvetica", "B", 8)
-        self.cell(170, 5, safe(f"  {title}"), fill=shade, new_x="LMARGIN", new_y="NEXT")
         self.set_font("Helvetica", "", 7)
         self.set_text_color(*C_MGR)
         self.set_x(self.l_margin + 4)
         self.multi_cell(166, 4, safe(detail), new_x="LMARGIN", new_y="NEXT")
         self.set_text_color(*C_DGR)
         self.ln(1)
+
+    def kv_flag(self, key, value, shade=False):
+        """Like kv() but renders boolean True/False with colour (red/green)."""
+        self.set_x(self.l_margin)
+        if shade:
+            self.set_fill_color(*C_LGR)
+        self.set_font("Helvetica", "B", 8)
+        self.cell(52, 5, safe(f"  {key}"), fill=shade)
+        bool_val = value is True or str(value).lower() == "true"
+        self.set_font("Helvetica", "B", 8)
+        self.set_text_color(*(C_HGH if bool_val else C_ADV))
+        val_w = self.w - self.l_margin - self.r_margin - 52
+        self.multi_cell(val_w, 5, "Yes" if bool_val else "No",
+                        fill=shade, new_x="LMARGIN", new_y="NEXT")
+        self.set_text_color(*C_DGR)
 
     def note(self, text):
         self.set_font("Helvetica", "I", 8)
@@ -365,18 +390,15 @@ def render_stress_test(pdf, num, label, data):
     base_avg = baseline.get("avg_latency_ms")
     sust_avg = sustained.get("avg_latency_ms")
 
-    for i, (k, v) in enumerate([
-        ("Target",              target),
-        ("Baseline Avg",        f"{base_avg} ms" if base_avg is not None else "unknown"),
-        ("Sustained Avg",       f"{sust_avg} ms" if sust_avg is not None else "unknown"),
-        ("High Jitter",         ind.get("high_jitter",        False)),
-        ("Latency Under Load",  ind.get("latency_under_load", False)),
-        ("Packet Loss",         ind.get("packet_loss",        False)),
-        ("Slow Recovery",       ind.get("slow_recovery",      False)),
-    ]):
-        pdf.kv(k, v, shade=i % 2 == 0)
+    pdf.kv("Target",         target,                                                    shade=False)
+    pdf.kv("Baseline Avg",   f"{base_avg} ms" if base_avg is not None else "unknown",  shade=True)
+    pdf.kv("Sustained Avg",  f"{sust_avg} ms" if sust_avg is not None else "unknown",  shade=False)
+    pdf.kv_flag("High Jitter",        ind.get("high_jitter",        False), shade=True)
+    pdf.kv_flag("Latency Under Load", ind.get("latency_under_load", False), shade=False)
+    pdf.kv_flag("Packet Loss",        ind.get("packet_loss",        False), shade=True)
+    pdf.kv_flag("Slow Recovery",      ind.get("slow_recovery",      False), shade=False)
 
-    # Stage breakdown
+    # Stage breakdown table
     stage_rows = [
         ("Baseline",     ss.get("baseline",    "?"), baseline.get("avg_latency_ms"),  None),
         ("Jitter",       ss.get("jitter",      "?"), jitter.get("stddev_ms"),         jitter.get("packet_loss_percent")),
@@ -384,19 +406,38 @@ def render_stress_test(pdf, num, label, data):
         ("Sustained",    ss.get("sustained",   "?"), sustained.get("avg_latency_ms"), sustained.get("packet_loss_percent")),
         ("Recovery",     ss.get("recovery",    "?"), recovery.get("avg_latency_ms"),  None),
     ]
-    pdf.ln(2)
-    pdf.set_font("Helvetica", "B", 8)
-    pdf.cell(0, 5, "  Stage Results:", new_x="LMARGIN", new_y="NEXT")
-    for (stage_name, status, avg, loss) in stage_rows:
-        avg_str  = f"{avg} ms" if avg  is not None else "n/a"
-        loss_str = f"  |  loss {loss}%" if loss is not None else ""
+    # Column widths: 55 + 20 + 50 + 45 = 170
+    COL = (55, 20, 50, 45)
+    pdf.ln(3)
+    # Header row
+    pdf.set_fill_color(*C_NAV)
+    pdf.set_text_color(*C_WHT)
+    pdf.set_font("Helvetica", "B", 7)
+    pdf.set_x(pdf.l_margin)
+    pdf.cell(COL[0], 5, "  Stage",   fill=True)
+    pdf.cell(COL[1], 5, "Status",    fill=True, align="C")
+    pdf.cell(COL[2], 5, "Avg",       fill=True, align="R")
+    pdf.cell(COL[3], 5, "Loss",      fill=True, align="R", new_x="LMARGIN", new_y="NEXT")
+    for i, (stage_name, status, avg, loss) in enumerate(stage_rows):
+        row_y = pdf.get_y()
+        if i % 2 == 0:
+            pdf.set_fill_color(*C_LGR)
+            pdf.rect(pdf.l_margin, row_y, 170, 5, "F")
+        avg_str  = f"{avg} ms"  if avg  is not None else "--"
+        loss_str = f"{loss}%"   if loss is not None else "--"
+        status_s = str(status) if status else "?"
         pdf.set_font("Helvetica", "", 7)
-        pdf.set_text_color(*C_MGR)
-        pdf.cell(
-            0, 4,
-            safe(f"    {stage_name}: {status}  |  avg {avg_str}{loss_str}"),
-            new_x="LMARGIN", new_y="NEXT",
-        )
+        pdf.set_text_color(*C_DGR)
+        pdf.set_x(pdf.l_margin)
+        pdf.cell(COL[0], 5, safe(f"  {stage_name}"))
+        if status_s.lower() == "ok":
+            pdf.set_text_color(*C_ADV)
+        elif status_s.lower() in ("warn", "warning", "fail", "failed"):
+            pdf.set_text_color(*C_HGH)
+        pdf.cell(COL[1], 5, safe(status_s), align="C")
+        pdf.set_text_color(*C_DGR)
+        pdf.cell(COL[2], 5, safe(avg_str),  align="R")
+        pdf.cell(COL[3], 5, safe(loss_str), align="R", new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(*C_DGR)
 
 
