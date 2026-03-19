@@ -499,7 +499,7 @@ def main():
     run_dir  = Path(sys.argv[1])
     app_root = Path(sys.argv[2])
     pdf_path_override = Path(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] else None
-    logo     = app_root / "assets" / "logo.svg"
+    logo     = app_root / "assets" / "logo.png"
 
     manifest        = load_json(run_dir / "manifest.json")        or {}
     findings_data   = load_json(run_dir / "findings.json")        or {}
