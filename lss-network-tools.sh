@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.18"
+APP_VERSION="v1.0.19"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -1667,6 +1667,9 @@ append_remediation_hints() {
     fi
     echo
   } >> "$report_file"
+
+  jq -n --argjson hints "$remediation_json" '{hints: $hints}' \
+    > "$RUN_OUTPUT_DIR/remediation.json" 2>/dev/null || true
 }
 
 write_manifest_for_current_run() {
@@ -1765,6 +1768,33 @@ write_manifest_for_current_run() {
   validate_json_file "$manifest_file"
 }
 
+generate_pdf_report() {
+  local py_script="$APP_ROOT/generate_pdf_report.py"
+  local pdf_out
+
+  if [[ -z "$RUN_OUTPUT_DIR" ]]; then
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! python3 -c "import fpdf" 2>/dev/null; then
+    return 0
+  fi
+  if [[ ! -f "$py_script" ]]; then
+    return 0
+  fi
+  if [[ ! -f "$RUN_MANIFEST_FILE" ]]; then
+    return 0
+  fi
+
+  echo "Generating PDF report..."
+  pdf_out="$(python3 "$py_script" "$RUN_OUTPUT_DIR" "$APP_ROOT" 2>/dev/null || true)"
+  if [[ -n "$pdf_out" && -f "$pdf_out" ]]; then
+    echo "PDF report: $(basename "$pdf_out")"
+  fi
+}
+
 finalize_run() {
   if [[ -n "$RUN_OUTPUT_DIR" ]] && [[ -n "$(find "$RUN_OUTPUT_DIR" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null)" ]]; then
     build_report_for_current_run || true
@@ -1776,6 +1806,7 @@ finalize_run() {
 
   if [[ -n "$RUN_OUTPUT_DIR" ]]; then
     write_manifest_for_current_run || true
+    generate_pdf_report || true
   fi
 
   if [[ -n "$SESSION_DEBUG_LOG" && -f "$SESSION_DEBUG_LOG" ]]; then
@@ -1807,6 +1838,10 @@ print_install_hint() {
         echo "Missing required Python library: scapy"
         echo "Install with: pip3 install scapy"
         ;;
+      python3-fpdf2)
+        echo "Missing required Python library: fpdf2"
+        echo "Install with: pip3 install fpdf2"
+        ;;
       *)
         echo "Missing required tool: $tool"
         echo "Install with: brew install $tool"
@@ -1820,6 +1855,10 @@ print_install_hint() {
         ;;
       python3-scapy)
         echo "Install with: apt-get install python3-scapy"
+        ;;
+      python3-fpdf2)
+        echo "Missing required Python library: fpdf2"
+        echo "Install with: pip3 install fpdf2"
         ;;
       *)
         echo "Install with: apt-get install $tool"
@@ -1877,6 +1916,16 @@ check_tools() {
       printf "${red}[MISSING]${reset} python3-scapy\n"
       missing=1
       missing_tools+=("python3-scapy")
+    fi
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    if python3 -c "import fpdf" 2>/dev/null; then
+      printf "${green}[OK]${reset} python3-fpdf2\n"
+    else
+      printf "${red}[MISSING]${reset} python3-fpdf2\n"
+      missing=1
+      missing_tools+=("python3-fpdf2")
     fi
   fi
 

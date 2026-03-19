@@ -2,14 +2,15 @@
 
 ## In Progress / Recently Shipped
 
+- **v1.0.19** — PDF report output with cover page, logo, findings, remediation hints, and per-task sections
 - **v1.0.18** — Task 12: VLAN/Trunk Detection (802.1Q passive capture, CDP/LLDP neighbour parsing via scapy)
 
 ---
 
 ## High Value / Low Effort
 
-### PDF Report Output
-Convert the existing `.txt` report to PDF using `pandoc`. No structural changes to report generation needed — clients expect a PDF deliverable.
+### ~~PDF Report Output~~ ✓ Done in v1.0.19
+Cover page with logo, dark navy branding, client/location/date, executive summary with colour-coded severity badges, remediation hints, and full per-task audit results. Logo goes in `assets/logo.png` (500×500 PNG). Dependency: `fpdf2` (pip3).
 
 ### Task 15: Wireless Scan
 Capture wireless environment data on the selected interface.
@@ -67,6 +68,7 @@ Compare a run against the previous run for the same client/location. Flag: new o
 
 | Version | Feature |
 |---------|---------|
+| v1.0.19 | PDF report output with logo, cover page, and colour-coded findings |
 | v1.0.18 | Task 12: VLAN/Trunk Detection |
 | v1.0.17 | Bug fixes: SELECTED_INTERFACE init, remote_tag guard, indentation, task 12 comment |
 | v1.0.16 | Installer self-refresh for outdated bundles, installer version freshness check |

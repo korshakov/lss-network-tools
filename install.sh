@@ -285,11 +285,13 @@ install_linux_dependencies() {
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update
     apt-get install -y nmap jq iproute2 iputils-ping tcpdump net-tools speedtest-cli zip unzip python3 python3-scapy
+    pip3 install --quiet fpdf2 2>/dev/null || pip3 install --quiet --break-system-packages fpdf2 2>/dev/null || true
     return 0
   fi
 
   if command -v dnf >/dev/null 2>&1; then
     dnf install -y nmap jq iproute iputils tcpdump net-tools speedtest-cli zip unzip python3 python3-scapy
+    pip3 install --quiet fpdf2 2>/dev/null || pip3 install --quiet --break-system-packages fpdf2 2>/dev/null || true
     return 0
   fi
 
@@ -318,6 +320,21 @@ install_macos_dependencies() {
     log "[OK] python3 scapy"
   else
     fail "Failed to install Python scapy library. Install manually with: pip3 install scapy"
+  fi
+
+  log "Checking Python fpdf2 library..."
+  if ! python3 -c "import fpdf" 2>/dev/null; then
+    log "Installing fpdf2 via pip3..."
+    if [[ -n "$BREW_USER" ]]; then
+      run_macos_user_shell "pip3 install --quiet fpdf2 2>/dev/null || pip3 install --quiet --break-system-packages fpdf2 2>/dev/null" || true
+    else
+      pip3 install --quiet fpdf2 2>/dev/null || pip3 install --quiet --break-system-packages fpdf2 2>/dev/null || true
+    fi
+  fi
+  if python3 -c "import fpdf" 2>/dev/null; then
+    log "[OK] python3 fpdf2"
+  else
+    fail "Failed to install Python fpdf2 library. Install manually with: pip3 install fpdf2"
   fi
 
   log "[OK] ipconfig"
@@ -383,6 +400,17 @@ deploy_application_files() {
     if [[ "$source_file" != "$target_file" ]]; then
       install -m 644 "$source_file" "$target_file"
     fi
+  fi
+
+  source_file="$SCRIPT_DIR/generate_pdf_report.py"
+  target_file="$APP_TARGET_DIR/generate_pdf_report.py"
+  if [[ -f "$source_file" && "$source_file" != "$target_file" ]]; then
+    install -m 755 "$source_file" "$target_file"
+  fi
+
+  if [[ -d "$SCRIPT_DIR/assets" ]]; then
+    mkdir -p "$APP_TARGET_DIR/assets"
+    cp -R "$SCRIPT_DIR/assets/." "$APP_TARGET_DIR/assets/"
   fi
 
   cat > "$APP_TARGET_DIR/install.env" <<EOF
