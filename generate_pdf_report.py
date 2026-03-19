@@ -123,7 +123,7 @@ class Report(FPDF):
         self.set_fill_color(*C_NAV)
         self.set_text_color(*C_WHT)
         self.set_font("Helvetica", "B", 10)
-        self.cell(0, 8, f"  {title}", fill=True, ln=1)
+        self.cell(0, 8, f"  {title}", fill=True, new_x="LMARGIN", new_y="NEXT")
         self.set_text_color(*C_DGR)
         self.ln(2)
 
@@ -132,7 +132,7 @@ class Report(FPDF):
         self.set_fill_color(*C_SBL)
         self.set_text_color(*C_NAV)
         self.set_font("Helvetica", "B", 9)
-        self.cell(0, 7, f"  {title}", fill=True, ln=1)
+        self.cell(0, 7, f"  {title}", fill=True, new_x="LMARGIN", new_y="NEXT")
         self.set_text_color(*C_DGR)
         self.ln(1)
 
@@ -143,7 +143,7 @@ class Report(FPDF):
         fill = shade
         self.cell(52, 5, f"  {key}", fill=fill)
         self.set_font("Helvetica", "", 8)
-        text = str(value) if value is not None else "\u2014"
+        text = str(value) if value is not None else "--"
         self.multi_cell(0, 5, text, fill=fill)
 
     def finding_row(self, severity, title, detail, shade=False):
@@ -159,7 +159,7 @@ class Report(FPDF):
         # Title on same line
         self.set_text_color(*C_DGR)
         self.set_font("Helvetica", "B", 8)
-        self.cell(0, 5, f"  {title}", ln=1)
+        self.cell(0, 5, f"  {title}", new_x="LMARGIN", new_y="NEXT")
         # Detail indented
         self.set_font("Helvetica", "", 7)
         self.set_text_color(*C_MGR)
@@ -172,7 +172,7 @@ class Report(FPDF):
         if shade:
             self.set_fill_color(*C_LGR)
         self.set_font("Helvetica", "B", 8)
-        self.cell(0, 5, f"  {title}", fill=shade, ln=1)
+        self.cell(0, 5, f"  {title}", fill=shade, new_x="LMARGIN", new_y="NEXT")
         self.set_font("Helvetica", "", 7)
         self.set_text_color(*C_MGR)
         self.set_x(self.l_margin + 4)
@@ -183,7 +183,7 @@ class Report(FPDF):
     def note(self, text):
         self.set_font("Helvetica", "I", 8)
         self.set_text_color(*C_MGR)
-        self.cell(0, 5, f"  {text}", ln=1)
+        self.cell(0, 5, f"  {text}", new_x="LMARGIN", new_y="NEXT")
         self.set_text_color(*C_DGR)
 
 
@@ -276,7 +276,7 @@ def render_dhcp(pdf, data):
     for ip in data.get("suspected_rogue_servers") or []:
         pdf.set_font("Helvetica", "", 8)
         pdf.set_text_color(*C_HGH)
-        pdf.cell(0, 5, f"  ! Suspected rogue responder: {ip}", ln=1)
+        pdf.cell(0, 5, f"  ! Suspected rogue responder: {ip}", new_x="LMARGIN", new_y="NEXT")
         pdf.set_text_color(*C_DGR)
 
 
@@ -292,10 +292,10 @@ def render_generic_scan(pdf, num, title, data):
         services = ", ".join(srv.get("detected_services") or []) or "unknown"
         pdf.set_font("Helvetica", "B", 8)
         pdf.set_text_color(*C_DGR)
-        pdf.cell(0, 5, f"  {ip}", ln=1)
+        pdf.cell(0, 5, f"  {ip}", new_x="LMARGIN", new_y="NEXT")
         pdf.set_font("Helvetica", "", 7)
         pdf.set_text_color(*C_MGR)
-        pdf.cell(0, 4, f"    Ports: {ports}   |   Services: {services}", ln=1)
+        pdf.cell(0, 4, f"    Ports: {ports}   |   Services: {services}", new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(*C_DGR)
 
 
@@ -315,14 +315,14 @@ def render_stress_test(pdf, num, label, data):
     if stages:
         pdf.ln(2)
         pdf.set_font("Helvetica", "B", 8)
-        pdf.cell(0, 5, "  Stage Results:", ln=1)
+        pdf.cell(0, 5, "  Stage Results:", new_x="LMARGIN", new_y="NEXT")
         for s in stages:
             pdf.set_font("Helvetica", "", 7)
             pdf.set_text_color(*C_MGR)
             pdf.cell(
                 0, 4,
                 f"    {s.get('stage','?')}:  avg {s.get('avg_ms','?')} ms  |  loss {s.get('packet_loss_pct','?')}%",
-                ln=1,
+                new_x="LMARGIN", new_y="NEXT",
             )
         pdf.set_text_color(*C_DGR)
 
@@ -347,7 +347,7 @@ def render_vlan_trunk(pdf, data):
     if cdp:
         pdf.ln(2)
         pdf.set_font("Helvetica", "B", 8)
-        pdf.cell(0, 5, f"  CDP Neighbours ({len(cdp)}):", ln=1)
+        pdf.cell(0, 5, f"  CDP Neighbours ({len(cdp)}):", new_x="LMARGIN", new_y="NEXT")
         for n in cdp:
             vlan = str(n.get("native_vlan")) if n.get("native_vlan") is not None else "unknown"
             pdf.set_font("Helvetica", "", 7)
@@ -357,14 +357,14 @@ def render_vlan_trunk(pdf, data):
                 f"    {n.get('device_id','?')}  |  {n.get('platform','?')}"
                 f"  |  Port: {n.get('port_id','?')}  |  Native VLAN: {vlan}"
                 f"  |  Duplex: {n.get('duplex','?')}",
-                ln=1,
+                new_x="LMARGIN", new_y="NEXT",
             )
         pdf.set_text_color(*C_DGR)
 
     if lldp:
         pdf.ln(2)
         pdf.set_font("Helvetica", "B", 8)
-        pdf.cell(0, 5, f"  LLDP Neighbours ({len(lldp)}):", ln=1)
+        pdf.cell(0, 5, f"  LLDP Neighbours ({len(lldp)}):", new_x="LMARGIN", new_y="NEXT")
         for n in lldp:
             pdf.set_font("Helvetica", "", 7)
             pdf.set_text_color(*C_MGR)
@@ -372,7 +372,7 @@ def render_vlan_trunk(pdf, data):
                 0, 4,
                 f"    {n.get('system_name','?')}  |  Chassis: {n.get('chassis_id','?')}"
                 f"  |  Port: {n.get('port_id','?')}",
-                ln=1,
+                new_x="LMARGIN", new_y="NEXT",
             )
         pdf.set_text_color(*C_DGR)
 
@@ -449,7 +449,7 @@ def main():
     pdf.cover()
 
     # ── Executive Summary ──────────────────────────────────────────────────
-    pdf.section_title("Executive Summary \u2014 Key Findings")
+    pdf.section_title("Executive Summary -- Key Findings")
     findings = findings_data.get("findings") or []
     if not findings:
         pdf.note("No notable findings were generated from this scan set.")
