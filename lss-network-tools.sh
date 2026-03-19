@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.38"
+APP_VERSION="v1.0.39"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -29,6 +29,7 @@ OUTPUT_IS_TTY=0
 DEBUG_MODE=0
 UNINSTALL_MODE=0
 VERSION_MODE=0
+UPDATE_MODE=0
 
 OS=""
 SELECTED_INTERFACE=""
@@ -811,12 +812,15 @@ parse_args() {
       --uninstall)
         UNINSTALL_MODE=1
         ;;
+      --update)
+        UPDATE_MODE=1
+        ;;
       --version)
         VERSION_MODE=1
         ;;
       *)
         echo "Unknown option: $1"
-        echo "Usage: lss-network-tools [--debug] [--uninstall] [--version]"
+        echo "Usage: lss-network-tools [--debug] [--uninstall] [--update] [--version]"
         exit 1
         ;;
     esac
@@ -6544,6 +6548,10 @@ configure_runtime_paths
 ensure_runtime_directories
 if [[ "$UNINSTALL_MODE" -eq 1 ]]; then
   uninstall_installed_application
+  exit $?
+fi
+if [[ "$UPDATE_MODE" -eq 1 ]]; then
+  check_for_updates
   exit $?
 fi
 clear_screen_if_supported
