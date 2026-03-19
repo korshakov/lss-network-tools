@@ -137,13 +137,15 @@ class Report(FPDF):
         self.ln(1)
 
     def kv(self, key, value, shade=False):
+        self.set_x(self.l_margin)
         if shade:
             self.set_fill_color(*C_LGR)
         self.set_font("Helvetica", "B", 8)
         self.cell(52, 5, safe(f"  {key}"), fill=shade)
         self.set_font("Helvetica", "", 8)
         val_w = self.w - self.l_margin - self.r_margin - 52
-        self.multi_cell(val_w, 5, safe(value), fill=shade)
+        self.multi_cell(val_w, 5, safe(str(value) if value is not None else "--"), fill=shade,
+                        new_x="LMARGIN", new_y="NEXT")
 
     def finding_row(self, severity, title, detail, shade=False):
         color = SEV_COLORS.get(severity.lower(), C_MGR)
@@ -163,7 +165,7 @@ class Report(FPDF):
         self.set_font("Helvetica", "", 7)
         self.set_text_color(*C_MGR)
         self.set_x(self.l_margin + 24)
-        self.multi_cell(146, 4, safe(detail))
+        self.multi_cell(146, 4, safe(detail), new_x="LMARGIN", new_y="NEXT")
         self.set_text_color(*C_DGR)
         self.ln(1)
 
@@ -175,7 +177,7 @@ class Report(FPDF):
         self.set_font("Helvetica", "", 7)
         self.set_text_color(*C_MGR)
         self.set_x(self.l_margin + 4)
-        self.multi_cell(166, 4, safe(detail))
+        self.multi_cell(166, 4, safe(detail), new_x="LMARGIN", new_y="NEXT")
         self.set_text_color(*C_DGR)
         self.ln(1)
 
