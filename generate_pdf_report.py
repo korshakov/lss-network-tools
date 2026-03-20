@@ -511,7 +511,7 @@ def render_vlan_trunk(pdf, data):
 
 
 def render_duplicate_ip(pdf, data):
-    pdf.subsection_title("15. Duplicate IP Detection")
+    pdf.subsection_title("11. Duplicate IP Detection")
     network        = data.get("network")          or "unknown"
     iface          = data.get("interface")        or "unknown"
     total_hosts    = data.get("total_hosts_seen", 0)
@@ -547,7 +547,7 @@ def render_duplicate_ip(pdf, data):
 
 def render_custom_port_scan(pdf, data, index):
     target = data.get("target_ip", "unknown")
-    pdf.subsection_title(f"11. Custom Target Port Scan - {target}  (device {index})")
+    pdf.subsection_title(f"12. Custom Target Port Scan - {target}  (device {index})")
     ports = data.get("open_ports") or []
     pdf.kv("Target IP",       target,                                            shade=False)
     pdf.kv("Open Port Count", str(len(ports)),                                   shade=True)
@@ -556,12 +556,12 @@ def render_custom_port_scan(pdf, data, index):
 
 def render_custom_stress(pdf, data, index):
     target = data.get("target_ip", "unknown")
-    render_stress_test(pdf, 12, f"Custom Target Stress Test - {target}  (device {index})", data)
+    render_stress_test(pdf, 13, f"Custom Target Stress Test - {target}  (device {index})", data)
 
 
 def render_custom_identity(pdf, data, index):
     target = data.get("target_ip", "unknown")
-    pdf.subsection_title(f"13. Custom Target Identity Scan - {target}  (device {index})")
+    pdf.subsection_title(f"14. Custom Target Identity Scan - {target}  (device {index})")
     for i, (k, v) in enumerate([
         ("Target IP",       target),
         ("Hostname",        data.get("hostname")),
@@ -576,7 +576,7 @@ def render_custom_identity(pdf, data, index):
 
 def render_custom_dns_assessment(pdf, data, index):
     target = data.get("target_ip", "unknown")
-    pdf.subsection_title(f"14. Custom DNS Assessment - {target}  (device {index})")
+    pdf.subsection_title(f"15. Custom DNS Assessment - {target}  (device {index})")
     for i, (k, v) in enumerate([
         ("Target IP",          target),
         ("DNS Service Working", data.get("dns_service_working", False)),
@@ -660,15 +660,15 @@ def main():
     if d := get(8):  render_generic_scan(pdf, 8,  "Printer/Print Server Network Scan", d)
     if d := get(9):  render_stress_test(pdf, 9,   "Gateway Stress Test",           d)
     if d := get(10): render_vlan_trunk(pdf, d)
-    if d := get(15): render_duplicate_ip(pdf, d)
+    if d := get(11): render_duplicate_ip(pdf, d)
 
-    for i, p in enumerate(all_task_json_paths(run_dir, manifest, 11), 1):
-        if d := load_json(p): render_custom_port_scan(pdf, d, i)
     for i, p in enumerate(all_task_json_paths(run_dir, manifest, 12), 1):
-        if d := load_json(p): render_custom_stress(pdf, d, i)
+        if d := load_json(p): render_custom_port_scan(pdf, d, i)
     for i, p in enumerate(all_task_json_paths(run_dir, manifest, 13), 1):
-        if d := load_json(p): render_custom_identity(pdf, d, i)
+        if d := load_json(p): render_custom_stress(pdf, d, i)
     for i, p in enumerate(all_task_json_paths(run_dir, manifest, 14), 1):
+        if d := load_json(p): render_custom_identity(pdf, d, i)
+    for i, p in enumerate(all_task_json_paths(run_dir, manifest, 15), 1):
         if d := load_json(p): render_custom_dns_assessment(pdf, d, i)
 
     # ── Output path ────────────────────────────────────────────────────────

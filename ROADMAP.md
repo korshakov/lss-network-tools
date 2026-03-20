@@ -2,7 +2,7 @@
 
 ## In Progress / Recently Shipped
 
-- **v1.0.50** — Task 15: Duplicate IP Detection — ARP scan to find IPs responding with multiple MACs (IP conflict / ARP spoofing)
+- **v1.0.50** — Task 11: Duplicate IP Detection — ARP scan to find IPs responding with multiple MACs; custom tasks renumbered 12-15
 - **v1.0.49** — Auto-relaunch after update; exec as root if already privileged, else sudo
 - **v1.0.48** — Simplify update flow: remove backup prompt and TYPE UPDATE step, replace with y/N confirm
 - **v1.0.47** — Fix PDF crash: self.note shadowed note() method, renamed to self.run_note
@@ -80,7 +80,7 @@ Compare a run against the previous run for the same client/location. Flag: new o
 
 | Version | Feature |
 |---------|---------|
-| v1.0.50 | Task 15: Duplicate IP Detection — ARP scan to find IPs responding with multiple MACs (IP conflict / ARP spoofing) |
+| v1.0.50 | Task 11: Duplicate IP Detection — ARP scan to find IPs responding with multiple MACs; custom tasks renumbered 12-15 |
 | v1.0.49 | Auto-relaunch after update; exec as root if already privileged, else sudo |
 | v1.0.48 | Simplify update flow: remove backup prompt and TYPE UPDATE step, replace with y/N confirm |
 | v1.0.47 | Fix PDF crash: self.note shadowed note() method, renamed to self.run_note |

@@ -48,11 +48,11 @@ TASKS_DATA=$(cat <<'TASKS'
 8|Printer/Print Server Network Scan|print-server-scan.json
 9|Gateway Stress Test|gateway-stress-test.json
 10|VLAN/Trunk Detection|vlan-trunk-scan.json
-11|Custom Target Port Scan|custom-target-port-scan.json
-12|Custom Target Stress Test|custom-target-stress-test.json
-13|Custom Target Identity Scan|custom-target-identity-scan.json
-14|Custom Target DNS Assessment|custom-target-dns-assessment.json
-15|Duplicate IP Detection|duplicate-ip-scan.json
+11|Duplicate IP Detection|duplicate-ip-scan.json
+12|Custom Target Port Scan|custom-target-port-scan.json
+13|Custom Target Stress Test|custom-target-stress-test.json
+14|Custom Target Identity Scan|custom-target-identity-scan.json
+15|Custom Target DNS Assessment|custom-target-dns-assessment.json
 TASKS
 )
 
@@ -1207,11 +1207,11 @@ build_report_for_current_run() {
         8) render_generic_network_scan_report "$file_path" "$report_file" "Printer" ;;
         9) render_gateway_stress_report "$file_path" "$report_file" ;;
         10) render_vlan_trunk_report "$file_path" "$report_file" ;;
-        11) render_custom_target_port_scan_report "$file_path" "$report_file" ;;
-        12) render_custom_target_stress_report "$file_path" "$report_file" ;;
-        13) render_custom_target_identity_report "$file_path" "$report_file" ;;
-        14) render_custom_target_dns_assessment_report "$file_path" "$report_file" ;;
-        15) render_duplicate_ip_report "$file_path" "$report_file" ;;
+        11) render_duplicate_ip_report "$file_path" "$report_file" ;;
+        12) render_custom_target_port_scan_report "$file_path" "$report_file" ;;
+        13) render_custom_target_stress_report "$file_path" "$report_file" ;;
+        14) render_custom_target_identity_report "$file_path" "$report_file" ;;
+        15) render_custom_target_dns_assessment_report "$file_path" "$report_file" ;;
       esac
 
       echo >> "$report_file"
@@ -1622,9 +1622,9 @@ append_findings_summary() {
       software_hint="$(jq -r '.software_hint // "unknown"' "$file" 2>/dev/null)"
       findings_json="$(append_finding_record "$findings_json" "warning" "Custom target is operating as a DNS resolver" "Target $target_ip answered DNS queries successfully. Software hint: $software_hint." "$(basename "$file")")"
     fi
-  done < <(task_json_files 14)
+  done < <(task_json_files 15)
 
-  file="$(task_output_path 15 2>/dev/null || true)"
+  file="$(task_output_path 11 2>/dev/null || true)"
   if json_file_usable "$file"; then
     local dup_count dup_ips_label
     dup_count="$(jq -r '.duplicate_count // 0' "$file" 2>/dev/null)"
@@ -3251,7 +3251,7 @@ duplicate_ip_detection() {
   local status="success"
   local success=true
 
-  json_file="$(task_output_path 15)"
+  json_file="$(task_output_path 11)"
 
   echo
   echo "Duplicate IP Detection"
@@ -4269,9 +4269,9 @@ custom_target_port_scan() {
   echo "Stage 1: Scanning all open ports on target (this may take up to 1 minute)..."
 
   scan_file="$(mktemp)"
-  entry_index="$(next_multi_entry_index 11)"
-  raw_file="$(multi_entry_raw_prefix_for_index 11 "$entry_index")-nmap.grep"
-  json_file="$(multi_entry_output_path_for_index 11 "$entry_index")"
+  entry_index="$(next_multi_entry_index 12)"
+  raw_file="$(multi_entry_raw_prefix_for_index 12 "$entry_index")-nmap.grep"
+  json_file="$(multi_entry_output_path_for_index 12 "$entry_index")"
   if [[ -z "$scan_file" || ! -f "$scan_file" ]]; then
     jq -n \
       --arg status "failed" \
@@ -4570,8 +4570,8 @@ custom_target_dns_assessment() {
     query_tool="nslookup"
   else
     echo "This function requires dig or nslookup."
-    entry_index="$(next_multi_entry_index 14)"
-    json_file="$(multi_entry_output_path_for_index 14 "$entry_index")"
+    entry_index="$(next_multi_entry_index 15)"
+    json_file="$(multi_entry_output_path_for_index 15 "$entry_index")"
     jq -n \
       --arg status "failed" \
       --argjson success false \
@@ -4585,8 +4585,8 @@ custom_target_dns_assessment() {
     return 1
   fi
 
-  entry_index="$(next_multi_entry_index 14)"
-  raw_prefix="$(multi_entry_raw_prefix_for_index 14 "$entry_index")"
+  entry_index="$(next_multi_entry_index 15)"
+  raw_prefix="$(multi_entry_raw_prefix_for_index 15 "$entry_index")"
 
   echo "Stage 1: Testing UDP DNS resolution..."
   udp_file="$(mktemp)"
@@ -4684,7 +4684,7 @@ custom_target_dns_assessment() {
   echo "Upstream Destination Inference: unknown"
   echo "Note: Client-side DNS answers cannot reliably reveal where this resolver forwards upstream traffic. That requires packet capture on the DNS host, firewall, or gateway."
 
-  json_file="$(multi_entry_output_path_for_index 14 "$entry_index")"
+  json_file="$(multi_entry_output_path_for_index 15 "$entry_index")"
   warnings_json="$(json_string_array_from_array warnings)"
   jq -n \
     --arg status "$status" \
@@ -4785,10 +4785,10 @@ custom_target_identity_scan() {
   echo
   echo "Stage 1: Discovering MAC address and vendor..."
 
-  entry_index="$(next_multi_entry_index 13)"
-  raw_prefix="$(multi_entry_raw_prefix_for_index 13 "$entry_index")"
+  entry_index="$(next_multi_entry_index 14)"
+  raw_prefix="$(multi_entry_raw_prefix_for_index 14 "$entry_index")"
   discovery_file="$(mktemp)"
-  json_file="$(multi_entry_output_path_for_index 13 "$entry_index")"
+  json_file="$(multi_entry_output_path_for_index 14 "$entry_index")"
   if [[ -z "$discovery_file" || ! -f "$discovery_file" ]]; then
     jq -n \
       --arg status "failed" \
@@ -5558,8 +5558,8 @@ custom_target_stress_test() {
   run_stress_test_for_target \
     "$target_ip" \
     "$SELECTED_INTERFACE" \
-    "12" \
-    "Function 12" \
+    "13" \
+    "Function 13" \
     "the specified target host $target_ip" \
     "Target IP" \
     "custom_target_stress_test" \
@@ -6519,7 +6519,7 @@ get_task_ids() {
 }
 
 get_audit_task_ids() {
-  echo "1 2 3 4 5 6 7 8 9 10 15"
+  echo "1 2 3 4 5 6 7 8 9 10 11"
 }
 
 task_title() {
@@ -6550,11 +6550,11 @@ task_description() {
     8) echo "Scans the local subnet for printer and print-server related ports." ;;
     9) echo "Runs a high-impact latency and packet-loss stress profile against the detected local gateway." ;;
     10) echo "Captures 802.1Q tagged frames and CDP/LLDP neighbour advertisements to detect VLAN trunking and switch identity." ;;
-    11) echo "Runs a full TCP port scan against a manually specified target IP." ;;
-    12) echo "Runs a high-impact latency and packet-loss stress profile against a manually specified target IP." ;;
-    13) echo "Combines MAC, vendor, hostname, and service fingerprint data to infer the identity of a target host." ;;
-    14) echo "Tests whether a target IP is operating as a DNS resolver and records its query behavior." ;;
-    15) echo "Sends ARP requests across the local subnet and flags any IP address that responds with more than one MAC address, indicating an IP conflict or ARP spoofing." ;;
+    11) echo "Sends ARP requests across the local subnet and flags any IP address that responds with more than one MAC address, indicating an IP conflict or ARP spoofing." ;;
+    12) echo "Runs a full TCP port scan against a manually specified target IP." ;;
+    13) echo "Runs a high-impact latency and packet-loss stress profile against a manually specified target IP." ;;
+    14) echo "Combines MAC, vendor, hostname, and service fingerprint data to infer the identity of a target host." ;;
+    15) echo "Tests whether a target IP is operating as a DNS resolver and records its query behavior." ;;
     000) echo "Runs the full core audit across functions 1 to 12." ;;
     *) echo "No description available." ;;
   esac
@@ -6582,11 +6582,11 @@ run_task_by_id() {
     8) detect_print_servers ;;
     9) gateway_stress_test ;;
     10) vlan_trunk_scan ;;
-    11) custom_target_port_scan ;;
-    12) custom_target_stress_test ;;
-    13) custom_target_identity_scan ;;
-    14) custom_target_dns_assessment ;;
-    15) duplicate_ip_detection ;;
+    11) duplicate_ip_detection ;;
+    12) custom_target_port_scan ;;
+    13) custom_target_stress_test ;;
+    14) custom_target_identity_scan ;;
+    15) custom_target_dns_assessment ;;
     *) return 1 ;;
   esac
 }
