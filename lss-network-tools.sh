@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.52"
+APP_VERSION="v1.0.53"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -5895,42 +5895,46 @@ dhcp_network_scan() {
     server="${unique_servers[$idx]}"
 
     echo
-    echo "Scanning all ports on Server $((idx + 1)) (this may take up to 1 minute)..."
+    echo "Scanning common ports on Server $((idx + 1))..."
 
     dhcp_scan_file="$(mktemp)"
+    local port_scan_ok=true
     if [[ -z "$dhcp_scan_file" || ! -f "$dhcp_scan_file" ]]; then
-      write_dhcp_failure_json "tempfile_creation_failed" "Unable to create a temporary file for DHCP server port scanning." "$discovery_attempts"
-      return 1
+      warnings+=("Could not create temp file for port scan of DHCP server $server. Port data will be absent.")
+      port_scan_ok=false
+    else
+      nmap --top-ports 1000 --open "$server" -oG - > "$dhcp_scan_file" 2>/dev/null &
+      local dhcp_scan_pid=$!
+      monitor_nmap_progress "$dhcp_scan_pid" "$dhcp_scan_file" 180 "ports" "Open Ports:" "DHCP server port scan failed for $server." || {
+        rm -f "$dhcp_scan_file"
+        warnings+=("Port scan of DHCP server $server did not complete. Port data will be absent.")
+        port_scan_ok=false
+      }
     fi
-    nmap -p- --open "$server" -oG - > "$dhcp_scan_file" 2>/dev/null &
-    local dhcp_scan_pid=$!
-    monitor_nmap_progress "$dhcp_scan_pid" "$dhcp_scan_file" 120 "ports" "Open Ports:" "DHCP server port scan failed for $server." || {
-      rm -f "$dhcp_scan_file"
-      write_dhcp_failure_json "dhcp_server_port_scan_failed" "The port scan for a discovered DHCP responder did not complete successfully." "$discovery_attempts"
-      return 1
-    }
     echo
 
-    while IFS= read -r port; do
-      [[ -n "$port" ]] && open_ports+=("$port")
-    done < <(awk '
-      /Ports:/ {
-        split($0, parts, "Ports: ")
-        if (length(parts) < 2) {
-          next
-        }
+    if [[ "$port_scan_ok" == "true" ]]; then
+      while IFS= read -r port; do
+        [[ -n "$port" ]] && open_ports+=("$port")
+      done < <(awk '
+        /Ports:/ {
+          split($0, parts, "Ports: ")
+          if (length(parts) < 2) {
+            next
+          }
 
-        n = split(parts[2], ports, ",")
-        for (i = 1; i <= n; i++) {
-          gsub(/^[[:space:]]+|[[:space:]]+$/, "", ports[i])
-          split(ports[i], fields, "/")
-          if (fields[2] == "open" && fields[1] ~ /^[0-9]+$/) {
-            print fields[1]
+          n = split(parts[2], ports, ",")
+          for (i = 1; i <= n; i++) {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", ports[i])
+            split(ports[i], fields, "/")
+            if (fields[2] == "open" && fields[1] ~ /^[0-9]+$/) {
+              print fields[1]
+            }
           }
         }
-      }
-    ' "$dhcp_scan_file")
-    rm -f "$dhcp_scan_file"
+      ' "$dhcp_scan_file")
+      rm -f "$dhcp_scan_file"
+    fi
 
     offer_count="$(printf '%s\n' "${raw_server_ids[@]}" | awk -v target="$server" '$0 == target {count++} END {print count+0}')"
     classification="$(classify_dhcp_server "$server" "$gateway_ip" "${open_ports[@]}")"
@@ -5943,7 +5947,7 @@ dhcp_network_scan() {
     echo "Unique Offers Observed: $(count_unique_offer_keys_for_server "$server" "${unique_offer_keys[@]:-}")"
     echo "Raw Offers Captured: $offer_count"
     echo "Classification: $classification"
-    if [[ "${#open_ports[@]}" -eq 0 ]]; then
+    if [[ "$port_scan_ok" == "true" && "${#open_ports[@]}" -eq 0 ]]; then
       echo "Warning: No open TCP ports were detected on this DHCP responder."
       warnings+=("No open TCP ports were detected on DHCP responder $server.")
     fi
@@ -6916,8 +6920,7 @@ run_all_tasks() {
     fi
 
     if ! run_task_with_progress_output "$func_id" "$func_name"; then
-      echo "Run all tasks stopped because Function $func_id failed."
-      return 1
+      echo "Function $func_id ($func_name) failed — continuing with remaining tasks."
     fi
   done
 }
