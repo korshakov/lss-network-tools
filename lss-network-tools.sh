@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.45"
+APP_VERSION="v1.0.46"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -48,9 +48,9 @@ TASKS_DATA=$(cat <<'TASKS'
 7|SMB/NFS Network Scan|smb-nfs-scan.json
 8|Printer/Print Server Network Scan|print-server-scan.json
 9|Gateway Stress Test|gateway-stress-test.json
-12|VLAN/Trunk Detection|vlan-trunk-scan.json
-10|Custom Target Port Scan|custom-target-port-scan.json
-11|Custom Target Stress Test|custom-target-stress-test.json
+10|VLAN/Trunk Detection|vlan-trunk-scan.json
+11|Custom Target Port Scan|custom-target-port-scan.json
+12|Custom Target Stress Test|custom-target-stress-test.json
 13|Custom Target Identity Scan|custom-target-identity-scan.json
 14|Custom Target DNS Assessment|custom-target-dns-assessment.json
 TASKS
@@ -1242,9 +1242,9 @@ build_report_for_current_run() {
         7) render_generic_network_scan_report "$file_path" "$report_file" "SMB/NFS" ;;
         8) render_generic_network_scan_report "$file_path" "$report_file" "Printer" ;;
         9) render_gateway_stress_report "$file_path" "$report_file" ;;
-        10) render_custom_target_port_scan_report "$file_path" "$report_file" ;;
-        11) render_custom_target_stress_report "$file_path" "$report_file" ;;
-        12) render_vlan_trunk_report "$file_path" "$report_file" ;;
+        10) render_vlan_trunk_report "$file_path" "$report_file" ;;
+        11) render_custom_target_port_scan_report "$file_path" "$report_file" ;;
+        12) render_custom_target_stress_report "$file_path" "$report_file" ;;
         13) render_custom_target_identity_report "$file_path" "$report_file" ;;
         14) render_custom_target_dns_assessment_report "$file_path" "$report_file" ;;
       esac
@@ -1621,7 +1621,7 @@ append_findings_summary() {
     fi
   fi
 
-  file="$(task_output_path 12 2>/dev/null || true)"
+  file="$(task_output_path 10 2>/dev/null || true)"
   if json_file_usable "$file"; then
     if [[ "$(jq -r '.indicators.trunk_port_suspected // false' "$file" 2>/dev/null)" == "true" ]]; then
       local vlan_ids_label
@@ -2990,7 +2990,7 @@ vlan_trunk_scan() {
   local cdp_pid
   local tagged_pid
 
-  json_file="$(task_output_path 12)"
+  json_file="$(task_output_path 10)"
 
   echo
   echo "VLAN / Trunk Detection"
@@ -4154,9 +4154,9 @@ custom_target_port_scan() {
   echo "Stage 1: Scanning all open ports on target (this may take up to 1 minute)..."
 
   scan_file="$(mktemp)"
-  entry_index="$(next_multi_entry_index 10)"
-  raw_file="$(multi_entry_raw_prefix_for_index 10 "$entry_index")-nmap.grep"
-  json_file="$(multi_entry_output_path_for_index 10 "$entry_index")"
+  entry_index="$(next_multi_entry_index 11)"
+  raw_file="$(multi_entry_raw_prefix_for_index 11 "$entry_index")-nmap.grep"
+  json_file="$(multi_entry_output_path_for_index 11 "$entry_index")"
   if [[ -z "$scan_file" || ! -f "$scan_file" ]]; then
     jq -n \
       --arg status "failed" \
@@ -5443,8 +5443,8 @@ custom_target_stress_test() {
   run_stress_test_for_target \
     "$target_ip" \
     "$SELECTED_INTERFACE" \
-    "11" \
-    "Function 11" \
+    "12" \
+    "Function 12" \
     "the specified target host $target_ip" \
     "Target IP" \
     "custom_target_stress_test" \
@@ -6362,7 +6362,7 @@ get_task_ids() {
 }
 
 get_audit_task_ids() {
-  echo "1 2 3 4 5 6 7 8 9 12"
+  echo "1 2 3 4 5 6 7 8 9 10"
 }
 
 task_title() {
@@ -6392,9 +6392,9 @@ task_description() {
     7) echo "Scans the local subnet for SMB, NFS, and related file-sharing services." ;;
     8) echo "Scans the local subnet for printer and print-server related ports." ;;
     9) echo "Runs a high-impact latency and packet-loss stress profile against the detected local gateway." ;;
-    10) echo "Runs a full TCP port scan against a manually specified target IP." ;;
-    11) echo "Runs a high-impact latency and packet-loss stress profile against a manually specified target IP." ;;
-    12) echo "Captures 802.1Q tagged frames and CDP/LLDP neighbour advertisements to detect VLAN trunking and switch identity." ;;
+    10) echo "Captures 802.1Q tagged frames and CDP/LLDP neighbour advertisements to detect VLAN trunking and switch identity." ;;
+    11) echo "Runs a full TCP port scan against a manually specified target IP." ;;
+    12) echo "Runs a high-impact latency and packet-loss stress profile against a manually specified target IP." ;;
     13) echo "Combines MAC, vendor, hostname, and service fingerprint data to infer the identity of a target host." ;;
     14) echo "Tests whether a target IP is operating as a DNS resolver and records its query behavior." ;;
     000) echo "Runs the full core audit across functions 1 to 12." ;;
@@ -6423,9 +6423,9 @@ run_task_by_id() {
     7) detect_smb_nfs_servers ;;
     8) detect_print_servers ;;
     9) gateway_stress_test ;;
-    10) custom_target_port_scan ;;
-    11) custom_target_stress_test ;;
-    12) vlan_trunk_scan ;;
+    10) vlan_trunk_scan ;;
+    11) custom_target_port_scan ;;
+    12) custom_target_stress_test ;;
     13) custom_target_identity_scan ;;
     14) custom_target_dns_assessment ;;
     *) return 1 ;;

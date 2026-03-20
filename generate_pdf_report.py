@@ -450,7 +450,7 @@ def render_stress_test(pdf, num, label, data):
 
 
 def render_vlan_trunk(pdf, data):
-    pdf.subsection_title("12. VLAN / Trunk Detection")
+    pdf.subsection_title("10. VLAN / Trunk Detection")
     vlan_ids = data.get("observed_vlan_ids") or []
     ind      = data.get("indicators") or {}
     for i, (k, v) in enumerate([
@@ -512,7 +512,7 @@ def render_vlan_trunk(pdf, data):
 
 def render_custom_port_scan(pdf, data, index):
     target = data.get("target_ip", "unknown")
-    pdf.subsection_title(f"10. Custom Target Port Scan - {target}  (device {index})")
+    pdf.subsection_title(f"11. Custom Target Port Scan - {target}  (device {index})")
     ports = data.get("open_ports") or []
     pdf.kv("Target IP",       target,                                            shade=False)
     pdf.kv("Open Port Count", str(len(ports)),                                   shade=True)
@@ -521,7 +521,7 @@ def render_custom_port_scan(pdf, data, index):
 
 def render_custom_stress(pdf, data, index):
     target = data.get("target_ip", "unknown")
-    render_stress_test(pdf, 11, f"Custom Target Stress Test - {target}  (device {index})", data)
+    render_stress_test(pdf, 12, f"Custom Target Stress Test - {target}  (device {index})", data)
 
 
 def render_custom_identity(pdf, data, index):
@@ -624,11 +624,11 @@ def main():
     if d := get(7):  render_generic_scan(pdf, 7,  "SMB/NFS Network Scan",          d)
     if d := get(8):  render_generic_scan(pdf, 8,  "Printer/Print Server Network Scan", d)
     if d := get(9):  render_stress_test(pdf, 9,   "Gateway Stress Test",           d)
-    if d := get(12): render_vlan_trunk(pdf, d)
+    if d := get(10): render_vlan_trunk(pdf, d)
 
-    for i, p in enumerate(all_task_json_paths(run_dir, manifest, 10), 1):
-        if d := load_json(p): render_custom_port_scan(pdf, d, i)
     for i, p in enumerate(all_task_json_paths(run_dir, manifest, 11), 1):
+        if d := load_json(p): render_custom_port_scan(pdf, d, i)
+    for i, p in enumerate(all_task_json_paths(run_dir, manifest, 12), 1):
         if d := load_json(p): render_custom_stress(pdf, d, i)
     for i, p in enumerate(all_task_json_paths(run_dir, manifest, 13), 1):
         if d := load_json(p): render_custom_identity(pdf, d, i)
