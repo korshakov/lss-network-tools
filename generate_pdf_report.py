@@ -180,10 +180,10 @@ class Report(FPDF):
         self.set_fill_color(210, 215, 225)
         self.rect(CARD_L + 2, CARD_TOP + 2, CARD_W, CARD_H, "F")
 
-        # Card background — clean white
+        # Card background — clean white with navy border
         self.set_fill_color(255, 255, 255)
-        self.set_draw_color(220, 225, 235)
-        self.set_line_width(0.3)
+        self.set_draw_color(*C_NAV)
+        self.set_line_width(0.4)
         self.rect(CARD_L, CARD_TOP, CARD_W, CARD_H, "FD")
 
         # Left navy accent bar
@@ -192,23 +192,23 @@ class Report(FPDF):
 
         y = CARD_TOP + 5
         for i, ((k, v), row_h) in enumerate(zip(rows, row_heights)):
-            # Subtle separator between rows (not before first)
+            # Navy separator between rows (not before first)
             if i > 0:
-                self.set_draw_color(230, 233, 240)
-                self.set_line_width(0.2)
+                self.set_draw_color(*C_NAV)
+                self.set_line_width(0.3)
                 self.line(CARD_L + 5, y, CARD_L + CARD_W, y)
 
             mid_y = y + (row_h - LINE_H) / 2
 
-            # Uppercase muted label
+            # Label in navy
             self.set_font("Helvetica", "B", 7)
-            self.set_text_color(150, 160, 180)
+            self.set_text_color(*C_NAV)
             self.set_xy(CARD_L + 11, mid_y)
             self.cell(LABEL_W, LINE_H, safe(k.upper()), align="L")
 
-            # Value in navy, multi_cell to handle wrapping
-            self.set_font("Helvetica", "B", 9.5)
-            self.set_text_color(*C_NAV)
+            # Value in muted grey, multi_cell to handle wrapping
+            self.set_font("Helvetica", "", 9.5)
+            self.set_text_color(*C_MGR)
             self.set_xy(CARD_L + 11 + LABEL_W, y + ROW_PAD)
             self.multi_cell(VAL_W, LINE_H, safe(str(v or "")), align="L",
                             new_x="LMARGIN", new_y="NEXT")
