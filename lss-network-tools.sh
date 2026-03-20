@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.60"
+APP_VERSION="v1.0.61"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -1416,9 +1416,9 @@ delete_all_previous_runs() {
   echo "This will permanently remove all run folders under:"
   echo "$OUTPUT_DIR"
   echo
-  read -r -p "Type DELETE to continue: " confirmation
+  read -r -p "Are you sure? [y/N]: " confirmation
 
-  if [[ "$confirmation" != "DELETE" ]]; then
+  if [[ "${confirmation,,}" != "y" ]]; then
     echo "Deletion cancelled."
     return 0
   fi
