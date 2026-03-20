@@ -510,6 +510,41 @@ def render_vlan_trunk(pdf, data):
     pdf.kv("Double-Tag Probe", probe, shade=False)
 
 
+def render_duplicate_ip(pdf, data):
+    pdf.subsection_title("15. Duplicate IP Detection")
+    network        = data.get("network")          or "unknown"
+    iface          = data.get("interface")        or "unknown"
+    total_hosts    = data.get("total_hosts_seen", 0)
+    duplicate_count= data.get("duplicate_count",  0)
+    duplicates     = data.get("duplicates")       or []
+
+    pdf.kv("Interface",        iface,          shade=False)
+    pdf.kv("Network Range",    network,        shade=True)
+    pdf.kv("Total Hosts Seen", total_hosts,    shade=False)
+    pdf.kv_flag("Duplicates Detected", duplicate_count > 0, shade=True)
+    pdf.kv("Duplicate IP Count", duplicate_count, shade=False)
+
+    if not duplicates:
+        pdf.note("No duplicate IPs detected. All hosts responded with a unique MAC address.")
+        return
+
+    pdf.ln(2)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_text_color(*C_DGR)
+    pdf.cell(0, 5, safe(f"  Conflicting Hosts ({duplicate_count}):"), new_x="LMARGIN", new_y="NEXT")
+    for dup in duplicates:
+        ip   = dup.get("ip",   "unknown")
+        macs = dup.get("macs") or []
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_text_color(*C_HGH)
+        pdf.cell(0, 5, safe(f"    {ip}"), new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 7)
+        pdf.set_text_color(*C_MGR)
+        for mac in macs:
+            pdf.cell(0, 4, safe(f"      MAC: {mac}"), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_text_color(*C_DGR)
+
+
 def render_custom_port_scan(pdf, data, index):
     target = data.get("target_ip", "unknown")
     pdf.subsection_title(f"11. Custom Target Port Scan - {target}  (device {index})")
@@ -625,6 +660,7 @@ def main():
     if d := get(8):  render_generic_scan(pdf, 8,  "Printer/Print Server Network Scan", d)
     if d := get(9):  render_stress_test(pdf, 9,   "Gateway Stress Test",           d)
     if d := get(10): render_vlan_trunk(pdf, d)
+    if d := get(15): render_duplicate_ip(pdf, d)
 
     for i, p in enumerate(all_task_json_paths(run_dir, manifest, 11), 1):
         if d := load_json(p): render_custom_port_scan(pdf, d, i)

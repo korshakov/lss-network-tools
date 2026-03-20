@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.49"
+APP_VERSION="v1.0.50"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -37,7 +37,6 @@ OS=""
 SELECTED_INTERFACE=""
 SHOW_FUNCTION_HEADER=1
 SPINNER_PID=""
-# Task IDs 12 is intentionally reserved/skipped (never assigned to a task).
 TASKS_DATA=$(cat <<'TASKS'
 1|Interface Network Info|interface-network-info.json
 2|Internet Speed Test|internet-speed-test.json
@@ -53,6 +52,7 @@ TASKS_DATA=$(cat <<'TASKS'
 12|Custom Target Stress Test|custom-target-stress-test.json
 13|Custom Target Identity Scan|custom-target-identity-scan.json
 14|Custom Target DNS Assessment|custom-target-dns-assessment.json
+15|Duplicate IP Detection|duplicate-ip-scan.json
 TASKS
 )
 
@@ -1211,6 +1211,7 @@ build_report_for_current_run() {
         12) render_custom_target_stress_report "$file_path" "$report_file" ;;
         13) render_custom_target_identity_report "$file_path" "$report_file" ;;
         14) render_custom_target_dns_assessment_report "$file_path" "$report_file" ;;
+        15) render_duplicate_ip_report "$file_path" "$report_file" ;;
       esac
 
       echo >> "$report_file"
@@ -1622,6 +1623,16 @@ append_findings_summary() {
       findings_json="$(append_finding_record "$findings_json" "warning" "Custom target is operating as a DNS resolver" "Target $target_ip answered DNS queries successfully. Software hint: $software_hint." "$(basename "$file")")"
     fi
   done < <(task_json_files 14)
+
+  file="$(task_output_path 15 2>/dev/null || true)"
+  if json_file_usable "$file"; then
+    local dup_count dup_ips_label
+    dup_count="$(jq -r '.duplicate_count // 0' "$file" 2>/dev/null)"
+    if [[ "$dup_count" =~ ^[0-9]+$ ]] && (( dup_count > 0 )); then
+      dup_ips_label="$(jq -r '[.duplicates[]? | .ip + " (" + (.macs | join(", ")) + ")"] | join("; ")' "$file" 2>/dev/null)"
+      findings_json="$(append_finding_record "$findings_json" "high" "Duplicate IP addresses detected on the network" "$dup_count IP address(es) responded to ARP from more than one MAC: ${dup_ips_label}. This indicates an IP conflict or possible ARP spoofing." "duplicate-ip-scan.json")"
+    fi
+  fi
 
   jq -n --argjson findings "$findings_json" '{findings: $findings}' > "$findings_file"
   validate_json_file "$findings_file"
@@ -3224,6 +3235,146 @@ PYEOF
   # Cleanup temp files
   rm -f "$tmp_pcap_tagged" "$tmp_pcap_cdp_lldp" "$tmp_py" "$tmp_raw_tagged" "$tmp_raw_cdp_lldp" 2>/dev/null || true
 }
+
+duplicate_ip_detection() {
+  local iface="$SELECTED_INTERFACE"
+  local json_file
+  local network
+  local raw_file
+  local scan_output
+  local tmp_py
+  local duplicate_count=0
+  local total_hosts=0
+  local duplicates_json="[]"
+  local warnings=()
+  local warnings_json="[]"
+  local status="success"
+  local success=true
+
+  json_file="$(task_output_path 15)"
+
+  echo
+  echo "Duplicate IP Detection"
+  echo "======================"
+
+  if [[ -z "$iface" ]]; then
+    jq -n '{status:"failed",success:false,error:{code:"NO_INTERFACE",message:"No network interface selected."},warnings:[],network:null,interface:null,total_hosts_seen:0,duplicate_count:0,duplicates:[]}' > "$json_file"
+    echo "No interface selected. Skipping."
+    return 1
+  fi
+
+  if ! hash arp-scan 2>/dev/null; then
+    echo "Error: arp-scan is not installed."
+    echo "  macOS: brew install arp-scan"
+    echo "  Linux: apt install arp-scan  /  yum install arp-scan"
+    jq -n \
+      --arg iface "$iface" \
+      '{status:"failed",success:false,error:{code:"NO_ARP_SCAN",message:"arp-scan is not installed. Install it with: brew install arp-scan (macOS) or apt/yum install arp-scan (Linux)."},warnings:[],network:null,interface:$iface,total_hosts_seen:0,duplicate_count:0,duplicates:[]}' > "$json_file"
+    validate_json_file "$json_file"
+    return 1
+  fi
+
+  network="$(get_interface_network_cidr "$iface")"
+  if [[ -z "$network" ]]; then
+    echo "Error: Unable to determine network range for $iface."
+    jq -n \
+      --arg iface "$iface" \
+      '{status:"failed",success:false,error:{code:"NO_NETWORK",message:"Unable to determine network range for the selected interface."},warnings:[],network:null,interface:$iface,total_hosts_seen:0,duplicate_count:0,duplicates:[]}' > "$json_file"
+    validate_json_file "$json_file"
+    return 1
+  fi
+
+  echo "Interface:  $iface"
+  echo "Network:    $network"
+  echo "Scanning for duplicate IPs using ARP (may take 10-30 seconds)..."
+
+  raw_file="$(current_raw_output_dir)/duplicate-ip-arp-scan.txt"
+  scan_output="$(arp-scan --interface="$iface" --localnet 2>/dev/null || true)"
+  echo "$scan_output" > "$raw_file"
+
+  tmp_py="$(mktemp /tmp/lss-dupip-XXXXXX.py)"
+  cat > "$tmp_py" <<'PYEOF'
+import sys, json, re, collections
+
+lines = sys.stdin.read().splitlines()
+ip_macs    = collections.OrderedDict()
+ip_vendors = collections.OrderedDict()
+
+for line in lines:
+    parts = line.split('\t')
+    if len(parts) < 2:
+        continue
+    ip = parts[0].strip()
+    if not ip or not ip[0].isdigit():
+        continue
+    mac    = parts[1].strip() if len(parts) > 1 else ""
+    vendor = parts[2].strip() if len(parts) > 2 else ""
+    vendor = re.sub(r'\s*\(DUP:\s*\d+\)', '', vendor).strip()
+    if ip not in ip_macs:
+        ip_macs[ip]    = []
+        ip_vendors[ip] = []
+    if mac not in ip_macs[ip]:
+        ip_macs[ip].append(mac)
+        ip_vendors[ip].append(vendor)
+
+duplicates = []
+for ip, macs in ip_macs.items():
+    if len(macs) > 1:
+        duplicates.append({"ip": ip, "macs": macs, "vendors": ip_vendors[ip]})
+
+print(json.dumps({
+    "total_hosts_seen": len(ip_macs),
+    "duplicate_count":  len(duplicates),
+    "duplicates":        duplicates,
+}))
+PYEOF
+
+  local py_result
+  py_result="$(echo "$scan_output" | python3 "$tmp_py" 2>/dev/null || echo '{"total_hosts_seen":0,"duplicate_count":0,"duplicates":[]}')"
+  rm -f "$tmp_py"
+
+  total_hosts="$(jq -r '.total_hosts_seen // 0'  <<< "$py_result")"
+  duplicate_count="$(jq -r '.duplicate_count  // 0'  <<< "$py_result")"
+  duplicates_json="$(jq -c '.duplicates      // []' <<< "$py_result")"
+
+  echo "Hosts seen: $total_hosts"
+  if [[ "$duplicate_count" -gt 0 ]]; then
+    echo "WARNING: $duplicate_count duplicate IP(s) detected!"
+    jq -r '.duplicates[] | "  " + .ip + "  →  " + (.macs | join(", "))' <<< "$py_result"
+    warnings+=("$duplicate_count IP address(es) responded to ARP from more than one MAC address, indicating an IP conflict or ARP spoofing.")
+    status="completed_with_warnings"
+  else
+    echo "No duplicate IPs detected."
+  fi
+
+  warnings_json="$(printf '%s\n' "${warnings[@]+"${warnings[@]}"}" | jq -Rs '[split("\n")[] | select(length > 0)]')"
+
+  jq -n \
+    --arg status "$status" \
+    --argjson success "$success" \
+    --arg iface "$iface" \
+    --arg network "$network" \
+    --argjson total_hosts "$total_hosts" \
+    --argjson duplicate_count "$duplicate_count" \
+    --argjson duplicates "$duplicates_json" \
+    --argjson warnings "$warnings_json" \
+    '{
+      status:           $status,
+      success:          $success,
+      error:            null,
+      warnings:         $warnings,
+      interface:        $iface,
+      network:          $network,
+      total_hosts_seen: $total_hosts,
+      duplicate_count:  $duplicate_count,
+      duplicates:       $duplicates
+    }' > "$json_file"
+
+  echo "Saved JSON: $json_file"
+  validate_json_file "$json_file"
+  return 0
+}
+
 
 ports_to_json_array() {
   local values=("$@")
@@ -6321,12 +6472,54 @@ render_generic_network_scan_report() {
 }
 
 
+render_duplicate_ip_report() {
+  local file="$1"
+  local report_file="$2"
+  local status error_code error_message warning_count
+  local total_hosts duplicate_count iface network
+
+  status="$(jq -r '.status // "success"' "$file" 2>/dev/null)"
+  error_code="$(jq -r '.error.code // empty' "$file" 2>/dev/null)"
+  error_message="$(jq -r '.error.message // empty' "$file" 2>/dev/null)"
+  warning_count="$(jq -r '(.warnings // []) | length' "$file" 2>/dev/null)"
+  iface="$(jq -r '.interface // "unknown"' "$file" 2>/dev/null)"
+  network="$(jq -r '.network // "unknown"' "$file" 2>/dev/null)"
+  total_hosts="$(jq -r '.total_hosts_seen // 0' "$file" 2>/dev/null)"
+  duplicate_count="$(jq -r '.duplicate_count // 0' "$file" 2>/dev/null)"
+
+  {
+    echo "Status: ${status:-unknown}"
+    if [[ -n "$error_code" ]]; then
+      echo "Error Code: $error_code"
+    fi
+    if [[ -n "$error_message" ]]; then
+      echo "Error Message: $error_message"
+    fi
+    if [[ -n "$warning_count" && "$warning_count" != "0" ]]; then
+      echo "Warnings: $warning_count"
+      jq -r '(.warnings // [])[] | "  - " + .' "$file" 2>/dev/null || true
+    fi
+    echo "Interface:        ${iface}"
+    echo "Network Range:    ${network}"
+    echo "Total Hosts Seen: ${total_hosts}"
+    echo "Duplicate IPs:    ${duplicate_count}"
+    echo ""
+    if [[ "$duplicate_count" -gt 0 ]]; then
+      echo "Conflicting Hosts:"
+      jq -r '.duplicates[]? | "  IP: " + .ip + "  MACs: " + (.macs | join(", "))' "$file" 2>/dev/null || true
+    else
+      echo "No duplicate IPs detected."
+    fi
+  } >> "$report_file"
+}
+
+
 get_task_ids() {
   awk -F'|' 'NF {print $1}' <<< "$TASKS_DATA" | paste -sd' ' -
 }
 
 get_audit_task_ids() {
-  echo "1 2 3 4 5 6 7 8 9 10"
+  echo "1 2 3 4 5 6 7 8 9 10 15"
 }
 
 task_title() {
@@ -6361,6 +6554,7 @@ task_description() {
     12) echo "Runs a high-impact latency and packet-loss stress profile against a manually specified target IP." ;;
     13) echo "Combines MAC, vendor, hostname, and service fingerprint data to infer the identity of a target host." ;;
     14) echo "Tests whether a target IP is operating as a DNS resolver and records its query behavior." ;;
+    15) echo "Sends ARP requests across the local subnet and flags any IP address that responds with more than one MAC address, indicating an IP conflict or ARP spoofing." ;;
     000) echo "Runs the full core audit across functions 1 to 12." ;;
     *) echo "No description available." ;;
   esac
@@ -6392,6 +6586,7 @@ run_task_by_id() {
     12) custom_target_stress_test ;;
     13) custom_target_identity_scan ;;
     14) custom_target_dns_assessment ;;
+    15) duplicate_ip_detection ;;
     *) return 1 ;;
   esac
 }

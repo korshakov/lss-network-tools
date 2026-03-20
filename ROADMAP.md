@@ -2,6 +2,7 @@
 
 ## In Progress / Recently Shipped
 
+- **v1.0.50** — Task 15: Duplicate IP Detection — ARP scan to find IPs responding with multiple MACs (IP conflict / ARP spoofing)
 - **v1.0.49** — Auto-relaunch after update; exec as root if already privileged, else sudo
 - **v1.0.48** — Simplify update flow: remove backup prompt and TYPE UPDATE step, replace with y/N confirm
 - **v1.0.47** — Fix PDF crash: self.note shadowed note() method, renamed to self.run_note
@@ -39,10 +40,9 @@ Render an ASCII chart of latency over time across the 7 stress stages using `awk
 
 ## Medium Value / Medium Effort
 
-### ARP Table Dump + Conflict Detection
-Capture the full ARP table at run start using `arp -a` / `ip neigh`. Flag duplicate IPs mapped to different MACs — a sign of ARP poisoning or misconfigured static IPs. No new dependencies.
+### ~~ARP Table Dump + Conflict Detection~~ ✓ Done in v1.0.50 (Task 15)
 
-### Port Scan Remediation Context (Task 10)
+### Port Scan Remediation Context (Task 11)
 Add a built-in lookup table of common ports with risk context. Example: port 23 = Telnet = unencrypted remote access (high risk), port 512 = rexec = high risk. Makes the custom port scan report actionable without requiring auditor expertise on every port number.
 
 ### Task 16: Traceroute
@@ -80,6 +80,7 @@ Compare a run against the previous run for the same client/location. Flag: new o
 
 | Version | Feature |
 |---------|---------|
+| v1.0.50 | Task 15: Duplicate IP Detection — ARP scan to find IPs responding with multiple MACs (IP conflict / ARP spoofing) |
 | v1.0.49 | Auto-relaunch after update; exec as root if already privileged, else sudo |
 | v1.0.48 | Simplify update flow: remove backup prompt and TYPE UPDATE step, replace with y/N confirm |
 | v1.0.47 | Fix PDF crash: self.note shadowed note() method, renamed to self.run_note |
