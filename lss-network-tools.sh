@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.57"
+APP_VERSION="v1.0.58"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -264,7 +264,9 @@ initialize_debug_logging() {
 
   find "$OUTPUT_DIR" -maxdepth 1 -type f -name '.debug-session-*.txt' -delete 2>/dev/null || true
 
-  if [[ -t 1 ]]; then
+  # Check stdin (fd 0) rather than stdout (fd 1) — stdout may already be
+  # piped through tee when relaunched after an update via exec sudo.
+  if [[ -t 0 ]]; then
     OUTPUT_IS_TTY=1
   fi
 
