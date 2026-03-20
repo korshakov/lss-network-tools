@@ -2,6 +2,7 @@
 
 ## In Progress / Recently Shipped
 
+- **v1.0.56** — Fix DHCP response time: replace scapy with pure Python stdlib socket approach (SOCK_DGRAM + SO_BROADCAST); eliminates BPF/promiscuous mode requirement; works on macOS and Linux
 - **v1.0.55** — Fix DHCP response time: disable promiscuous mode on sniff (macOS blocks it; DHCP offers are broadcast so promisc not needed)
 - **v1.0.54** — Fix DHCP response time Python crash: add outer exception handler, capture stderr, broaden BPF filter to port 67+68
 - **v1.0.53** — Fix DHCP port scan fatal failure; switch to top-1000 ports, make timeout non-fatal; 000 audit continues past task failures
@@ -85,6 +86,7 @@ Compare a run against the previous run for the same client/location. Flag: new o
 
 | Version | Feature |
 |---------|---------|
+| v1.0.56 | Fix DHCP response time: replace scapy with pure Python stdlib socket (SOCK_DGRAM + SO_BROADCAST + SO_REUSEPORT); no BPF, no promiscuous mode; compatible with macOS and Linux |
 | v1.0.55 | Fix DHCP response time promiscuous mode error on macOS; DHCP offers are broadcast so promisc=False is sufficient |
 | v1.0.54 | Fix DHCP response time Python crash: outer exception handler, stderr capture, broader BPF filter (port 67+68) |
 | v1.0.53 | Fix DHCP task fatal port scan failure; switch nmap to top-1000 ports, make failure a warning; 000 audit continues past failures |
