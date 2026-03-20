@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.43"
+APP_VERSION="v1.0.44"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -21,6 +21,8 @@ RUN_CLIENT_SLUG=""
 RUN_LOCATION_SLUG=""
 RUN_REPORT_FILE=""
 RUN_PREPARED_BY=""
+RUN_NOTE=""
+RUN_NOTE_SLUG=""
 HIGH_IMPACT_STRESS_CONFIRMED=0
 SESSION_DEBUG_LOG=""
 RUN_DEBUG_LOG=""
@@ -1074,6 +1076,7 @@ lookup_mac_vendor_online() {
 initialize_run_context() {
   read -r -p "Location: " RUN_LOCATION
   read -r -p "Client Name: " RUN_CLIENT_NAME
+  read -r -p "Note (optional — e.g. VLAN 10, Server Room, Guest WiFi): " RUN_NOTE
 
   if [[ -z "$RUN_LOCATION" ]]; then
     RUN_LOCATION="Unknown"
@@ -1087,7 +1090,15 @@ initialize_run_context() {
   RUN_CLIENT_SLUG="$(sanitize_for_filename "$RUN_CLIENT_NAME")"
   RUN_DATE_STAMP="$(date '+%d-%m-%Y')"
   RUN_REPORT_TIME_STAMP="$(date '+%H-%M')"
-  RUN_OUTPUT_DIR="$OUTPUT_DIR/${RUN_CLIENT_SLUG}-${RUN_LOCATION_SLUG}-${RUN_DATE_STAMP}"
+
+  if [[ -n "$RUN_NOTE" ]]; then
+    RUN_NOTE_SLUG="$(sanitize_for_filename "$RUN_NOTE")"
+    RUN_OUTPUT_DIR="$OUTPUT_DIR/${RUN_CLIENT_SLUG}-${RUN_LOCATION_SLUG}-${RUN_DATE_STAMP}-${RUN_NOTE_SLUG}"
+  else
+    RUN_NOTE_SLUG=""
+    RUN_OUTPUT_DIR="$OUTPUT_DIR/${RUN_CLIENT_SLUG}-${RUN_LOCATION_SLUG}-${RUN_DATE_STAMP}"
+  fi
+
   RUN_REPORT_FILE="$RUN_OUTPUT_DIR/lss-network-tools-report-${RUN_CLIENT_SLUG}-${RUN_LOCATION_SLUG}-${RUN_DATE_STAMP}-${RUN_REPORT_TIME_STAMP}.txt"
   RUN_DEBUG_LOG="$RUN_OUTPUT_DIR/debug.txt"
   RUN_MANIFEST_FILE="$RUN_OUTPUT_DIR/manifest.json"
@@ -1159,6 +1170,9 @@ build_report_for_current_run() {
     echo "==============================================="
     echo "Location: $RUN_LOCATION"
     echo "Client: $RUN_CLIENT_NAME"
+    if [[ -n "$RUN_NOTE" ]]; then
+      echo "Note: $RUN_NOTE"
+    fi
     echo "Generated: $timestamp"
     echo "Prepared By: ${RUN_PREPARED_BY:-Unknown}"
     echo "Selected Interface: $report_interface"
@@ -1272,14 +1286,17 @@ load_run_metadata_from_dir() {
   if json_file_usable "$manifest_file"; then
     RUN_LOCATION="$(jq -r '.location // "Unknown"' "$manifest_file" 2>/dev/null)"
     RUN_CLIENT_NAME="$(jq -r '.client // "Unknown"' "$manifest_file" 2>/dev/null)"
+    RUN_NOTE="$(jq -r '.note // ""' "$manifest_file" 2>/dev/null)"
     SELECTED_INTERFACE="$(jq -r '.selected_interface // "unknown"' "$manifest_file" 2>/dev/null)"
   else
     RUN_LOCATION="Unknown"
     RUN_CLIENT_NAME="Unknown"
+    RUN_NOTE=""
   fi
 
   RUN_LOCATION_SLUG="$(sanitize_for_filename "$RUN_LOCATION")"
   RUN_CLIENT_SLUG="$(sanitize_for_filename "$RUN_CLIENT_NAME")"
+  RUN_NOTE_SLUG="$(sanitize_for_filename "$RUN_NOTE")"
   RUN_DATE_STAMP="$(date '+%d-%m-%Y')"
 }
 
@@ -1297,10 +1314,13 @@ build_report_from_previous_run() {
   local previous_manifest_file="${RUN_MANIFEST_FILE:-}"
   local previous_location="${RUN_LOCATION:-}"
   local previous_client="${RUN_CLIENT_NAME:-}"
+  local previous_note="${RUN_NOTE:-}"
   local previous_location_slug="${RUN_LOCATION_SLUG:-}"
   local previous_client_slug="${RUN_CLIENT_SLUG:-}"
+  local previous_note_slug="${RUN_NOTE_SLUG:-}"
   local previous_date_stamp="${RUN_DATE_STAMP:-}"
   local previous_selected_interface="${SELECTED_INTERFACE:-}"
+  local manifest_file label generated_at m_client m_location m_note
 
   while IFS= read -r run_dir; do
     [[ -n "$run_dir" ]] && run_dirs+=("$run_dir")
@@ -1316,7 +1336,19 @@ build_report_from_previous_run() {
   echo "=============================="
   echo
   for run_dir in "${run_dirs[@]}"; do
-    echo "$idx) $(basename "$run_dir")"
+    manifest_file="$run_dir/manifest.json"
+    if [[ -f "$manifest_file" ]]; then
+      m_client="$(jq -r '.client // ""' "$manifest_file" 2>/dev/null)"
+      m_location="$(jq -r '.location // ""' "$manifest_file" 2>/dev/null)"
+      m_note="$(jq -r '.note // ""' "$manifest_file" 2>/dev/null)"
+      generated_at="$(jq -r '.generated_at // ""' "$manifest_file" 2>/dev/null)"
+      label="${m_client} / ${m_location}"
+      [[ -n "$m_note" ]] && label="${label} — ${m_note}"
+      [[ -n "$generated_at" ]] && label="${label}  [${generated_at}]"
+    else
+      label="$(basename "$run_dir")"
+    fi
+    echo "$idx) $label"
     idx=$((idx + 1))
   done
   echo "0) Exit"
@@ -1383,8 +1415,10 @@ build_report_from_previous_run() {
     RUN_MANIFEST_FILE="$previous_manifest_file"
     RUN_LOCATION="$previous_location"
     RUN_CLIENT_NAME="$previous_client"
+    RUN_NOTE="$previous_note"
     RUN_LOCATION_SLUG="$previous_location_slug"
     RUN_CLIENT_SLUG="$previous_client_slug"
+    RUN_NOTE_SLUG="$previous_note_slug"
     RUN_DATE_STAMP="$previous_date_stamp"
     SELECTED_INTERFACE="$previous_selected_interface"
     return 1
@@ -1399,8 +1433,10 @@ build_report_from_previous_run() {
   RUN_MANIFEST_FILE="$previous_manifest_file"
   RUN_LOCATION="$previous_location"
   RUN_CLIENT_NAME="$previous_client"
+  RUN_NOTE="$previous_note"
   RUN_LOCATION_SLUG="$previous_location_slug"
   RUN_CLIENT_SLUG="$previous_client_slug"
+  RUN_NOTE_SLUG="$previous_note_slug"
   RUN_DATE_STAMP="$previous_date_stamp"
   SELECTED_INTERFACE="$previous_selected_interface"
 }
@@ -1767,6 +1803,7 @@ write_manifest_for_current_run() {
     --arg generated_at "$timestamp" \
     --arg location "$RUN_LOCATION" \
     --arg client "$RUN_CLIENT_NAME" \
+    --arg note "${RUN_NOTE:-}" \
     --arg prepared_by "${RUN_PREPARED_BY:-}" \
     --arg run_directory "$(basename "$RUN_OUTPUT_DIR")" \
     --arg selected_interface "$selected_interface_value" \
@@ -1778,6 +1815,7 @@ write_manifest_for_current_run() {
       generated_at: $generated_at,
       client: $client,
       location: $location,
+      note: $note,
       prepared_by: $prepared_by,
       run_directory: $run_directory,
       selected_interface: $selected_interface,

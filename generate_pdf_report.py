@@ -34,10 +34,11 @@ SEV_COLORS = {
 
 # ── PDF class ──────────────────────────────────────────────────────────────
 class Report(FPDF):
-    def __init__(self, client, location, date_stamp, prepared_by, logo_path):
+    def __init__(self, client, location, note, date_stamp, prepared_by, logo_path):
         super().__init__(orientation="P", unit="mm", format="A4")
         self.client      = client
         self.location    = location
+        self.note        = note
         self.date_stamp  = date_stamp
         self.prepared_by = prepared_by
         self.logo_path   = logo_path
@@ -108,8 +109,10 @@ class Report(FPDF):
         rows = [
             ("Client",      self.client),
             ("Location",    self.location),
-            ("Date",        self.date_stamp),
         ]
+        if self.note:
+            rows.append(("Note", self.note))
+        rows.append(("Date", self.date_stamp))
         if self.prepared_by:
             rows.append(("Prepared By", self.prepared_by))
         row_h   = 5
@@ -568,12 +571,14 @@ def main():
 
     client      = manifest.get("client",       "Unknown Client")
     location    = manifest.get("location",     "Unknown Location")
+    note        = manifest.get("note",         "")
     date_stamp  = manifest.get("generated_at", "Unknown Date")
     prepared_by = prepared_by_arg or manifest.get("prepared_by",  "")
 
     pdf = Report(
         client      = client,
         location    = location,
+        note        = note,
         date_stamp  = date_stamp,
         prepared_by = prepared_by,
         logo_path   = str(logo) if logo.exists() else None,
@@ -619,12 +624,6 @@ def main():
     if d := get(7):  render_generic_scan(pdf, 7,  "SMB/NFS Network Scan",          d)
     if d := get(8):  render_generic_scan(pdf, 8,  "Printer/Print Server Network Scan", d)
     if d := get(9):  render_stress_test(pdf, 9,   "Gateway Stress Test",           d)
-
-    t10_paths = all_task_json_paths(run_dir, manifest, 10)
-    t11_paths = all_task_json_paths(run_dir, manifest, 11)
-    if not t10_paths and not t11_paths and get(12):
-        pdf.note("Tasks 10 and 11 (Custom Target Port Scan / Stress Test) were not executed.")
-
     if d := get(12): render_vlan_trunk(pdf, d)
 
     for i, p in enumerate(all_task_json_paths(run_dir, manifest, 10), 1):
