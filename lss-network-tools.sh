@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.61"
+APP_VERSION="v1.0.62"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -801,7 +801,7 @@ task_output_path() {
 
 task_supports_multiple_entries() {
   case "$1" in
-    10|11|13|14) return 0 ;;
+    10|13|14|15|16) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -1519,14 +1519,43 @@ append_findings_summary() {
   file="$(task_output_path 3 2>/dev/null || true)"
   if json_file_usable "$file"; then
     open_port_count="$(jq -r '(.open_ports // []) | length' "$file" 2>/dev/null)"
-    if [[ "$open_port_count" =~ ^[0-9]+$ ]] && (( open_port_count >= 8 )); then
+    if [[ "$open_port_count" =~ ^[0-9]+$ ]] && (( open_port_count >= 3 )); then
       gateway="$(jq -r '.gateway_ip // "unknown"' "$file" 2>/dev/null)"
-      open_ports_label="$(jq -r '(.open_ports // []) | map(tostring) | join(", ")' "$file" 2>/dev/null)"
-      findings_json="$(append_finding_record "$findings_json" "high" "Gateway exposes many open ports" "Gateway $gateway has $open_port_count open TCP ports: $open_ports_label." "gateway-scan.json")"
-    elif [[ "$open_port_count" =~ ^[0-9]+$ ]] && (( open_port_count >= 5 )); then
-      gateway="$(jq -r '.gateway_ip // "unknown"' "$file" 2>/dev/null)"
-      open_ports_label="$(jq -r '(.open_ports // []) | map(tostring) | join(", ")' "$file" 2>/dev/null)"
-      findings_json="$(append_finding_record "$findings_json" "warning" "Gateway exposes multiple open ports" "Gateway $gateway has $open_port_count open TCP ports: $open_ports_label." "gateway-scan.json")"
+      open_ports_label="$(jq -r '(.open_ports // []) | map(
+        . as $p |
+        if $p == 21 then "21/FTP"
+        elif $p == 22 then "22/SSH"
+        elif $p == 23 then "23/Telnet"
+        elif $p == 25 then "25/SMTP"
+        elif $p == 53 then "53/DNS"
+        elif $p == 80 then "80/HTTP"
+        elif $p == 443 then "443/HTTPS"
+        elif $p == 3389 then "3389/RDP"
+        elif $p == 8007 then "8007/HTTP-Alt"
+        elif $p == 8080 then "8080/HTTP-Alt"
+        elif $p == 8443 then "8443/HTTPS-Alt"
+        elif $p == 10050 then "10050/Zabbix-Agent"
+        elif $p == 10051 then "10051/Zabbix-Server"
+        else (. | tostring)
+        end
+      ) | join(", ")' "$file" 2>/dev/null)"
+      local gw_notes=""
+      if jq -e '(.open_ports // []) | any(. == 80)' "$file" >/dev/null 2>&1; then
+        gw_notes="${gw_notes} Unencrypted HTTP (port 80) is accessible — confirm HTTPS-only management is enforced."
+      fi
+      if jq -e '(.open_ports // []) | any(. == 10050)' "$file" >/dev/null 2>&1; then
+        gw_notes="${gw_notes} Port 10050 (Zabbix Agent) is exposed — restrict access to the Zabbix server IP only."
+      fi
+      if jq -e '(.open_ports // []) | any(. == 23)' "$file" >/dev/null 2>&1; then
+        gw_notes="${gw_notes} Telnet (port 23) is open — this is unencrypted and should be disabled."
+      fi
+      local gw_severity="info"
+      (( open_port_count >= 8 )) && gw_severity="high"
+      (( open_port_count >= 5 && open_port_count < 8 )) && gw_severity="warning"
+      local gw_title="Gateway exposes open ports"
+      (( open_port_count >= 8 )) && gw_title="Gateway exposes many open ports"
+      (( open_port_count >= 5 && open_port_count < 8 )) && gw_title="Gateway exposes multiple open ports"
+      findings_json="$(append_finding_record "$findings_json" "$gw_severity" "$gw_title" "Gateway $gateway has $open_port_count open TCP port(s): ${open_ports_label}.${gw_notes}" "gateway-scan.json")"
     fi
   fi
 
@@ -1643,6 +1672,32 @@ append_findings_summary() {
     fi
   fi
 
+  file="$(task_output_path 8 2>/dev/null || true)"
+  if json_file_usable "$file"; then
+    local nfs_hosts nfs_count
+    nfs_hosts="$(jq -r '[.servers[]? | select(.detected_services[]? | test("^nfs$")) | .ip] | join(", ")' "$file" 2>/dev/null)"
+    nfs_count="$(jq -r '[.servers[]? | select(.detected_services[]? | test("^nfs$"))] | length' "$file" 2>/dev/null)"
+    if [[ "$nfs_count" =~ ^[0-9]+$ ]] && (( nfs_count > 0 )); then
+      findings_json="$(append_finding_record "$findings_json" "warning" "NFS shares exposed on the network" "${nfs_count} host(s) have NFS (port 2049) accessible: ${nfs_hosts}. NFS without strict host-based access controls allows any network host to attempt to mount available shares." "smb-nfs-scan.json")"
+    fi
+  fi
+
+  file="$(task_output_path 9 2>/dev/null || true)"
+  if json_file_usable "$file"; then
+    local printer_count jetdirect_count jetdirect_hosts all_printer_ips
+    printer_count="$(jq -r '(.servers // []) | length' "$file" 2>/dev/null)"
+    if [[ "$printer_count" =~ ^[0-9]+$ ]] && (( printer_count > 0 )); then
+      jetdirect_count="$(jq -r '[.servers[]? | select(.open_ports[]? | . == 9100)] | length' "$file" 2>/dev/null)"
+      jetdirect_hosts="$(jq -r '[.servers[]? | select(.open_ports[]? | . == 9100) | .ip] | join(", ")' "$file" 2>/dev/null)"
+      all_printer_ips="$(jq -r '[.servers[]?.ip] | join(", ")' "$file" 2>/dev/null)"
+      if [[ "$jetdirect_count" =~ ^[0-9]+$ ]] && (( jetdirect_count > 0 )); then
+        findings_json="$(append_finding_record "$findings_json" "warning" "Printers with unauthenticated JetDirect port exposed" "${jetdirect_count} of ${printer_count} printer(s) have port 9100 (JetDirect/raw printing) open: ${jetdirect_hosts}. This port accepts print jobs without authentication and can be used to retrieve previously printed documents on some models." "print-server-scan.json")"
+      else
+        findings_json="$(append_finding_record "$findings_json" "info" "Printers detected on the network" "${printer_count} printer(s) detected: ${all_printer_ips}." "print-server-scan.json")"
+      fi
+    fi
+  fi
+
   jq -n --argjson findings "$findings_json" '{findings: $findings}' > "$findings_file"
   validate_json_file "$findings_file"
 
@@ -1688,8 +1743,12 @@ append_remediation_hints() {
     remediation_json="$(append_finding_record "$remediation_json" "advice" "Validate directory expectations" "If Active Directory services are expected on this site, confirm the selected subnet and check whether LDAP, Kerberos, or Global Catalog ports are being filtered or hosted elsewhere." "ldap-ad-scan.json")"
   fi
 
+  if jq -e '.findings[]? | select(.source == "smb-nfs-scan.json" and (.title | test("NFS"; "i")))' "$findings_file" >/dev/null 2>&1; then
+    remediation_json="$(append_finding_record "$remediation_json" "advice" "Restrict NFS access" "Configure /etc/exports to limit NFS mounts to specific authorised client IPs or subnets. Consider whether NFS is still required or can be replaced with a protocol that supports authentication and encryption (e.g. SMB with signing, or SFTP)." "smb-nfs-scan.json")"
+  fi
+
   if jq -e '.findings[]? | select(.source == "print-server-scan.json")' "$findings_file" >/dev/null 2>&1; then
-    remediation_json="$(append_finding_record "$remediation_json" "advice" "Validate print infrastructure expectations" "If printers or print servers are expected, verify that they are on the same subnet and that ports 515, 631, or 9100 are not filtered." "print-server-scan.json")"
+    remediation_json="$(append_finding_record "$remediation_json" "advice" "Secure printer access" "Disable raw printing (port 9100/JetDirect) on printers where it is not required, or restrict it to the print server IP only. Enable authentication on printer management interfaces and keep firmware up to date." "print-server-scan.json")"
   fi
 
   if jq -e '.findings[]? | select(.source == "vlan-trunk-scan.json")' "$findings_file" >/dev/null 2>&1; then

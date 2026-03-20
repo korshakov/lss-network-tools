@@ -2,6 +2,7 @@
 
 ## In Progress / Recently Shipped
 
+- **v1.0.62** — Fix VLAN manifest bug; enrich gateway port names (Zabbix/HTTP callouts); add NFS exposure and printer JetDirect findings with remediation hints
 - **v1.0.61** — Simplify delete all runs confirmation: replace "Type DELETE" with y/N prompt
 - **v1.0.60** — DHCP response time: replace SOCK_DGRAM port-68 receive with SOCK_RAW; eliminates competition with system DHCP client on macOS/Linux
 - **v1.0.59** — Increase DHCP response time probe count from 5 to 10 for more reliable statistics
@@ -91,6 +92,7 @@ Compare a run against the previous run for the same client/location. Flag: new o
 
 | Version | Feature |
 |---------|---------|
+| v1.0.62 | Fix VLAN manifest json_present bug (task 11 wrongly in task_supports_multiple_entries); gateway finding now shows port names and calls out HTTP/Zabbix/Telnet; NFS exposure and printer JetDirect findings added with remediation hints |
 | v1.0.61 | Simplify delete all runs confirmation from "Type DELETE" to y/N prompt |
 | v1.0.60 | DHCP response time: SOCK_RAW receive instead of SOCK_DGRAM on port 68; kernel copies packet to raw socket without competing with system DHCP client |
 | v1.0.59 | Increase DHCP response time probe count from 5 to 10 for more reliable statistics |
