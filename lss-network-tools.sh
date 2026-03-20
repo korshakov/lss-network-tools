@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.62"
+APP_VERSION="v1.0.63"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -190,9 +190,9 @@ confirm_gateway_stress_operation() {
   echo "It does not perform exploits or service attacks, but it can disrupt routing, VPNs, WAN access, or unstable devices."
   echo "Run this only when you accept possible service impact."
   echo "If the target is a gateway or firewall, consider disconnecting it from internet or performing this after-hours if disruption would be unacceptable."
-  read -r -p "Type PROCEED to continue: " confirmation
+  read -r -p "Proceed? [y/N]: " confirmation
 
-  if [[ "$confirmation" != "PROCEED" ]]; then
+  if [[ "${confirmation,,}" != "y" ]]; then
     echo "Gateway Stress Test cancelled."
     return 1
   fi
