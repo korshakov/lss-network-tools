@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.59"
+APP_VERSION="v1.0.60"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -6084,53 +6084,89 @@ def make_dhcp_discover(xid, mac_bytes):
     )
     return bootp + options
 
-def parse_server_ip(data, sender_ip):
+def parse_server_ip(bootp, sender_ip):
     # Prefer DHCP option 54 (Server Identifier)
-    if len(data) > 240 and data[236:240] == DHCP_MAGIC:
+    if len(bootp) > 240 and bootp[236:240] == DHCP_MAGIC:
         i = 240
-        while i < len(data) - 2:
-            opt = data[i]
+        while i < len(bootp) - 2:
+            opt = bootp[i]
             if opt == 255:
                 break
             if opt == 0:
                 i += 1
                 continue
-            length = data[i+1]
+            length = bootp[i+1]
             if opt == 54 and length == 4:
-                return socket.inet_ntoa(data[i+2:i+6])
+                return socket.inet_ntoa(bootp[i+2:i+6])
             i += 2 + length
     # Fallback: siaddr field in BOOTP header (bytes 20-23)
-    if len(data) >= 24:
-        siaddr = socket.inet_ntoa(data[20:24])
+    if len(bootp) >= 24:
+        siaddr = socket.inet_ntoa(bootp[20:24])
         if siaddr != '0.0.0.0':
             return siaddr
     return sender_ip
 
-def is_dhcp_offer(data, xid):
-    if len(data) < 244:
+def is_dhcp_offer(bootp, xid):
+    if len(bootp) < 244:
         return False
-    if data[0] != 2:  # BOOTREPLY
+    if bootp[0] != 2:  # BOOTREPLY
         return False
-    if data[236:240] != DHCP_MAGIC:
+    if bootp[236:240] != DHCP_MAGIC:
         return False
-    if struct.unpack('!I', data[4:8])[0] != xid:
+    if struct.unpack('!I', bootp[4:8])[0] != xid:
         return False
     i = 240
-    while i < len(data) - 2:
-        opt = data[i]
+    while i < len(bootp) - 2:
+        opt = bootp[i]
         if opt == 255:
             break
         if opt == 0:
             i += 1
             continue
-        length = data[i+1]
+        length = bootp[i+1]
         if opt == 53 and length == 1:
-            return data[i+2] == 2  # DHCP Offer
+            return bootp[i+2] == 2  # DHCP Offer
         i += 2 + length
     return False
 
+def extract_bootp_from_raw(raw):
+    # raw = IP header + UDP header + BOOTP payload
+    # Parse IP header length (variable due to options)
+    if len(raw) < 28:
+        return None, None
+    ip_hdr_len = (raw[0] & 0x0f) * 4
+    if len(raw) < ip_hdr_len + 8:
+        return None, None
+    # UDP header: src(2) dst(2) len(2) cksum(2)
+    dst_port = struct.unpack('!H', raw[ip_hdr_len+2:ip_hdr_len+4])[0]
+    if dst_port != 68:
+        return None, None
+    # Extract source IP from IP header (bytes 12-15)
+    src_ip = socket.inet_ntoa(raw[12:16])
+    bootp  = raw[ip_hdr_len+8:]
+    return bootp, src_ip
+
 results   = []
 server_ip = None
+
+# Raw socket receives a copy of every incoming UDP packet — no port
+# binding, no competition with the system DHCP client.
+try:
+    recv_sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP)
+except PermissionError:
+    print(json.dumps({"error": "probe_error: raw socket requires root privileges"}))
+    sys.exit(0)
+
+# Send socket — standard DGRAM, no port 68 bind needed
+send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+send_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+# Linux: pin both sockets to the chosen interface
+try:
+    SO_BINDTODEVICE = 25
+    recv_sock.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, iface.encode() + b'\x00')
+    send_sock.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, iface.encode() + b'\x00')
+except (AttributeError, OSError):
+    pass  # macOS does not support SO_BINDTODEVICE; not needed there
 
 try:
     for i in range(probe_count):
@@ -6139,46 +6175,31 @@ try:
         xid          = random.randint(1, 0xffffffff)
         pkt          = make_dhcp_discover(xid, mac_bytes)
 
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        if hasattr(socket, 'SO_REUSEPORT'):
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        # Linux: bind socket to the specific interface so we only receive
-        # responses on that link (ignored silently on macOS)
-        try:
-            SO_BINDTODEVICE = 25
-            sock.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE,
-                            iface.encode() + b'\x00')
-        except (AttributeError, OSError):
-            pass
+        t_start   = time.time()
+        send_sock.sendto(pkt, ('255.255.255.255', 67))
+        got_offer = False
+        deadline  = t_start + 5
 
-        try:
-            sock.bind(('', 68))
-            t_start = time.time()
-            sock.sendto(pkt, ('255.255.255.255', 67))
-            got_offer = False
-            deadline  = t_start + 5
-            while True:
-                remaining = deadline - time.time()
-                if remaining <= 0:
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            recv_sock.settimeout(remaining)
+            try:
+                raw, addr = recv_sock.recvfrom(1500)
+                bootp, src_ip = extract_bootp_from_raw(raw)
+                if bootp is not None and is_dhcp_offer(bootp, xid):
+                    elapsed_ms = round((time.time() - t_start) * 1000, 1)
+                    results.append(elapsed_ms)
+                    if server_ip is None:
+                        server_ip = parse_server_ip(bootp, src_ip)
+                    got_offer = True
                     break
-                sock.settimeout(remaining)
-                try:
-                    data, addr = sock.recvfrom(1500)
-                    if is_dhcp_offer(data, xid):
-                        elapsed_ms = round((time.time() - t_start) * 1000, 1)
-                        results.append(elapsed_ms)
-                        if server_ip is None:
-                            server_ip = parse_server_ip(data, addr[0])
-                        got_offer = True
-                        break
-                except socket.timeout:
-                    break
-            if not got_offer:
-                results.append(None)
-        finally:
-            sock.close()
+            except socket.timeout:
+                break
+
+        if not got_offer:
+            results.append(None)
 
         if i < probe_count - 1:
             time.sleep(0.5)
@@ -6186,6 +6207,9 @@ try:
 except Exception as e:
     print(json.dumps({"error": f"probe_error: {e}"}))
     sys.exit(0)
+finally:
+    recv_sock.close()
+    send_sock.close()
 
 responded = [r for r in results if r is not None]
 loss_pct  = round((probe_count - len(responded)) / probe_count * 100, 1)
