@@ -76,6 +76,8 @@ class Report(FPDF):
 
     # ── Cover page ──────────────────────────────────────────────────────────
     def cover(self):
+        self.set_auto_page_break(False)   # prevent any cover element triggering a new page
+
         C_ACC  = (74, 144, 226)   # light blue accent
         C_DIM  = (160, 190, 230)  # dimmed white for subtitle
         C_NVL  = (38,  60, 100)   # slightly lighter navy for node fills
@@ -204,6 +206,7 @@ class Report(FPDF):
         self.set_xy(0, 282)
         self.cell(210, 5, "Not for distribution beyond the named recipient", align="C")
 
+        self.set_auto_page_break(True, margin=20)
         self._cover_done = True
 
     # ── Layout helpers ──────────────────────────────────────────────────────
@@ -810,13 +813,43 @@ CUSTOM_TASK_NOTE = (
 )
 
 
+def _about_table_header(pdf, col):
+    """Draw the about-page table column headers at the current Y position."""
+    pdf.set_fill_color(*C_NAV)
+    pdf.set_text_color(*C_WHT)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_x(20)
+    pdf.cell(col[0], 7, "  #",  fill=True)
+    pdf.cell(col[1], 7, "Task", fill=True)
+    pdf.cell(col[2], 7, "What it checks and why it matters", fill=True,
+             new_x="LMARGIN", new_y="NEXT")
+
+
+def _measure_row_h(pdf, desc, col_w, line_h):
+    """Return the row height needed to fit desc in col_w mm at the current font."""
+    words = safe(desc).split()
+    lines, line_w = 1, 0.0
+    for word in words:
+        w = pdf.get_string_width(word + " ")
+        if line_w + w > col_w - 1:
+            lines += 1
+            line_w = w
+        else:
+            line_w += w
+    return max(10.0, lines * line_h + 5)
+
+
 def render_about_report(pdf):
-    C_ACC = (74, 144, 226)
+    C_ACC      = (74, 144, 226)
+    COL        = (12, 52, 106)
+    LINE_H     = 4.2
+    PAGE_SAFE  = 272   # stop drawing rows below this Y (297mm - ~25mm safety)
 
     pdf.add_page()
+    pdf.set_auto_page_break(False)   # handle page breaks manually for the table
+
     pdf.section_title("About This Report")
 
-    # Intro paragraph
     pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(*C_DGR)
     pdf.set_x(20)
@@ -829,85 +862,69 @@ def render_about_report(pdf):
         new_x="LMARGIN", new_y="NEXT",
     )
     pdf.ln(4)
-
-    # Column widths: num=12, name=52, desc=106
-    COL = (12, 52, 106)
-    HDR_H = 7
-
-    # Header row
-    pdf.set_fill_color(*C_NAV)
-    pdf.set_text_color(*C_WHT)
-    pdf.set_font("Helvetica", "B", 8)
-    pdf.set_x(20)
-    pdf.cell(COL[0], HDR_H, "  #",      fill=True)
-    pdf.cell(COL[1], HDR_H, "Task",     fill=True)
-    pdf.cell(COL[2], HDR_H, "What it checks and why it matters", fill=True,
-             new_x="LMARGIN", new_y="NEXT")
+    _about_table_header(pdf, COL)
 
     for i, (num, name, desc) in enumerate(TASK_DESCRIPTIONS):
-        # Measure description height
-        line_h   = 4.2
         pdf.set_font("Helvetica", "", 7.5)
-        # Estimate lines needed (approx 14 chars/mm at 7.5pt, col width 106mm)
-        char_per_line = int(106 / 2.05)
-        est_lines = max(1, -(-len(desc) // char_per_line))  # ceiling div
-        row_h = max(10, est_lines * line_h + 4)
+        row_h = _measure_row_h(pdf, desc, COL[2], LINE_H)
+
+        # If this row won't fit, start a new page and redraw the header
+        if pdf.get_y() + row_h > PAGE_SAFE:
+            pdf.add_page()
+            pdf.set_auto_page_break(False)
+            _about_table_header(pdf, COL)
 
         row_y = pdf.get_y()
 
-        # Alternating row background
-        if i % 2 == 0:
-            pdf.set_fill_color(*C_LGR)
-        else:
-            pdf.set_fill_color(250, 251, 254)
+        # Row background
+        pdf.set_fill_color(*C_LGR if i % 2 == 0 else (250, 251, 254))
         pdf.rect(20, row_y, sum(COL), row_h, "F")
 
-        # Left accent stripe coloured by task number group
-        if num <= 3:
-            stripe = C_INF
-        elif num <= 6:
-            stripe = C_ADV
-        elif num <= 9:
-            stripe = C_WRN
-        else:
-            stripe = (130, 80, 180)   # purple for tasks 10-12
+        # Left accent stripe
+        if   num <= 3: stripe = C_INF
+        elif num <= 6: stripe = C_ADV
+        elif num <= 9: stripe = C_WRN
+        else:          stripe = (130, 80, 180)
         pdf.set_fill_color(*stripe)
         pdf.rect(20, row_y, 2, row_h, "F")
+
+        mid_y = row_y + (row_h - 5) / 2
 
         # Task number
         pdf.set_font("Helvetica", "B", 8)
         pdf.set_text_color(*C_NAV)
-        pdf.set_xy(22, row_y + (row_h - 5) / 2)
+        pdf.set_xy(22, mid_y)
         pdf.cell(COL[0] - 2, 5, safe(str(num)), align="C")
 
         # Task name
-        pdf.set_font("Helvetica", "B", 8)
-        pdf.set_text_color(*C_NAV)
-        pdf.set_xy(20 + COL[0], row_y + (row_h - 5) / 2)
+        pdf.set_xy(20 + COL[0], mid_y)
         pdf.cell(COL[1], 5, safe(name), align="L")
 
-        # Description (multi-cell)
+        # Description — vertically centred within the row
+        desc_lines  = max(1, round((row_h - 5) / LINE_H))
+        desc_top_y  = row_y + (row_h - desc_lines * LINE_H) / 2
         pdf.set_font("Helvetica", "", 7.5)
         pdf.set_text_color(*C_DGR)
-        pdf.set_xy(20 + COL[0] + COL[1], row_y + 2)
-        pdf.multi_cell(COL[2], line_h, safe(desc), new_x="LMARGIN", new_y="NEXT")
+        pdf.set_xy(20 + COL[0] + COL[1], desc_top_y)
+        pdf.multi_cell(COL[2], LINE_H, safe(desc), new_x="LMARGIN", new_y="NEXT")
 
-        # Advance Y to end of row if multi_cell left us short
-        if pdf.get_y() < row_y + row_h:
-            pdf.set_y(row_y + row_h)
+        pdf.set_y(row_y + row_h)   # always advance to exact row bottom
 
-    # Light divider
+    # Footer note
     pdf.ln(3)
+    if pdf.get_y() + 12 > PAGE_SAFE:
+        pdf.add_page()
+        pdf.set_auto_page_break(False)
     pdf.set_draw_color(*C_ACC)
     pdf.set_line_width(0.4)
     pdf.line(20, pdf.get_y(), 190, pdf.get_y())
     pdf.ln(3)
-
-    # Custom tasks note
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(*C_MGR)
     pdf.set_x(20)
     pdf.multi_cell(170, 4.5, safe(CUSTOM_TASK_NOTE), new_x="LMARGIN", new_y="NEXT")
+
+    pdf.set_auto_page_break(True, margin=20)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────
