@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.80"
+APP_VERSION="v1.0.81"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -5474,30 +5474,40 @@ def _scan_macos_system_profiler(iface):
         )
         data = json.loads(result.stdout)
         networks = []
-        sec_map = {'wpa3': 'WPA3', 'wpa2': 'WPA2', 'wpa': 'WPA', 'open': 'Open', 'none': 'Open'}
+        def parse_sec(raw):
+            raw = (raw or '').lower()
+            if 'wpa3' in raw:     return 'WPA3'
+            if 'enterprise' in raw: return 'WPA2-Enterprise'
+            if 'wpa2' in raw:     return 'WPA2'
+            if 'wpa' in raw:      return 'WPA'
+            return 'Open'
+        def parse_rssi(raw):
+            # e.g. "-46 dBm / -96 dBm"
+            try:
+                return int(str(raw).split()[0])
+            except (ValueError, IndexError):
+                return 0
+        def parse_channel(raw):
+            # e.g. "36 (5GHz, 20MHz)"
+            return str(raw).split()[0] if raw else ''
+        seen = set()
         for entry in (data.get('SPAirPortDataType') or []):
-            for wifi_iface in (entry.get('spairport_wireless_interfaces') or []):
-                cur = wifi_iface.get('spairport_wireless_current_network_information')
-                others = wifi_iface.get('spairport_wireless_other_local_wireless_networks') or []
-                all_nets = ([cur] if cur else []) + others
-                for net in all_nets:
+            for wifi_iface in (entry.get('spairport_airport_interfaces') or []):
+                cur    = wifi_iface.get('spairport_current_network_information')
+                others = wifi_iface.get('spairport_airport_other_local_wireless_networks') or []
+                for net in ([cur] if cur else []) + others:
                     if not net:
                         continue
                     ssid = net.get('_name') or '(hidden)'
-                    rssi = net.get('spairport_wireless_network_signal_noise', 0)
-                    channel = str(net.get('spairport_wireless_network_channel', '')).split(',')[0]
-                    sec_raw = net.get('spairport_wireless_network_security_mode', '').lower()
-                    security = 'Open'
-                    for key, label in sec_map.items():
-                        if key in sec_raw:
-                            security = label
-                            break
+                    if ssid in seen:
+                        continue
+                    seen.add(ssid)
                     networks.append({
-                        'ssid': ssid,
-                        'bssid': net.get('spairport_wireless_network_bssid', '--') or '--',
-                        'rssi_dbm': int(rssi) if isinstance(rssi, (int, float)) else 0,
-                        'channel': channel,
-                        'security': security,
+                        'ssid':     ssid,
+                        'bssid':    '--',
+                        'rssi_dbm': parse_rssi(net.get('spairport_signal_noise')),
+                        'channel':  parse_channel(net.get('spairport_network_channel')),
+                        'security': parse_sec(net.get('spairport_security_mode')),
                     })
         return networks
     except Exception:
