@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.93"
+APP_VERSION="v1.0.94"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -5641,7 +5641,14 @@ build_wifi_scan_helper_macos() {
   # authorization — macOS shows a modal dialog and adds the app to the
   # System Settings → Privacy & Security → Location Services list.
   # The built binary is cached at $_LSS_WIFI_HELPER.
-  [[ -x "$_LSS_WIFI_HELPER/Contents/MacOS/LSS-WiFiScan" ]] && return 0
+  # Rebuild if the helper doesn't exist or was built for a different app version
+  local _helper_ver_file="${_LSS_WIFI_HELPER}.version"
+  if [[ -x "$_LSS_WIFI_HELPER/Contents/MacOS/LSS-WiFiScan" ]]; then
+    local _cached_ver
+    _cached_ver="$(cat "$_helper_ver_file" 2>/dev/null)"
+    [[ "$_cached_ver" == "$APP_VERSION" ]] && return 0
+    echo "  Wi-Fi scan helper outdated — rebuilding..."
+  fi
 
   local swiftc_bin
   swiftc_bin="$(command -v swiftc 2>/dev/null)"
@@ -5693,45 +5700,60 @@ func writeResult(_ str: String) {
     try? str.write(toFile: kOutput, atomically: true, encoding: .utf8)
 }
 
-func scanNetworks() {
-    let client = CWWiFiClient.shared()
-    let iface  = kIface.isEmpty
-        ? client.interface()
-        : (client.interface(withName: kIface) ?? client.interface())
-    guard let wi = iface else { writeResult("[]"); NSApp.terminate(nil); return }
-
-    var results: [[String: Any]] = []
-    if let networks = try? wi.scanForNetworks(withSSID: nil) {
-        for n in networks {
-            var e: [String: Any] = [:]
-            e["ssid"]            = n.ssid ?? "(hidden)"
-            e["bssid"]           = n.bssid ?? "--"
-            e["rssi_dbm"]        = n.rssiValue
-            e["noise_floor_dbm"] = n.noiseMeasurement
-            e["phy_mode"]        = "--"
-            if let ch = n.wlanChannel {
-                e["channel"] = ch.channelNumber
-                switch ch.channelBand {
-                case .band2GHz:    e["band"] = "2.4GHz"
-                case .band5GHz:    e["band"] = "5GHz"
-                case .band6GHz:    e["band"] = "6GHz"
-                case .bandUnknown: e["band"] = "unknown"
-                @unknown default:  e["band"] = "unknown"
-                }
-                switch ch.channelWidth {
-                case .width20MHz:   e["channel_width"] = "20MHz"
-                case .width40MHz:   e["channel_width"] = "40MHz"
-                case .width80MHz:   e["channel_width"] = "80MHz"
-                case .width160MHz:  e["channel_width"] = "160MHz"
-                case .widthUnknown: e["channel_width"] = "unknown"
-                @unknown default:   e["channel_width"] = "unknown"
-                }
-            }
-            // CWNetwork has no public security property; omit rather than guess
-            e["security"] = "--"
-            results.append(e)
+func buildEntry(_ n: CWNetwork) -> [String: Any] {
+    var e: [String: Any] = [:]
+    e["ssid"]            = n.ssid ?? "(hidden)"
+    e["bssid"]           = n.bssid ?? "--"
+    e["rssi_dbm"]        = n.rssiValue
+    e["noise_floor_dbm"] = n.noiseMeasurement
+    e["phy_mode"]        = "--"
+    e["security"]        = "--"
+    if let ch = n.wlanChannel {
+        e["channel"] = ch.channelNumber
+        switch ch.channelBand {
+        case .band2GHz:    e["band"] = "2.4GHz"
+        case .band5GHz:    e["band"] = "5GHz"
+        case .band6GHz:    e["band"] = "6GHz"
+        case .bandUnknown: e["band"] = "unknown"
+        @unknown default:  e["band"] = "unknown"
+        }
+        switch ch.channelWidth {
+        case .width20MHz:   e["channel_width"] = "20MHz"
+        case .width40MHz:   e["channel_width"] = "40MHz"
+        case .width80MHz:   e["channel_width"] = "80MHz"
+        case .width160MHz:  e["channel_width"] = "160MHz"
+        case .widthUnknown: e["channel_width"] = "unknown"
+        @unknown default:   e["channel_width"] = "unknown"
         }
     }
+    return e
+}
+
+func scanNetworks() {
+    let client = CWWiFiClient.shared()
+    let wi = kIface.isEmpty
+        ? client.interface()
+        : (client.interface(withName: kIface) ?? client.interface())
+    guard let wi = wi else {
+        try? "ERROR: no interface found".write(toFile: kOutput + ".err", atomically: true, encoding: .utf8)
+        writeResult("[]"); NSApp.terminate(nil); return
+    }
+
+    var results: [[String: Any]] = []
+    do {
+        // Try by SSID (nil = all networks)
+        let networks = try wi.scanForNetworks(withSSID: nil)
+        results = networks.map { buildEntry($0) }
+    } catch {
+        // Fallback: scan by name
+        do {
+            let networks = try wi.scanForNetworks(withName: nil)
+            results = networks.map { buildEntry($0) }
+        } catch let err2 {
+            try? "ERROR: \(err2)".write(toFile: kOutput + ".err", atomically: true, encoding: .utf8)
+        }
+    }
+
     if let data = try? JSONSerialization.data(withJSONObject: results),
        let str  = String(data: data, encoding: .utf8) {
         writeResult(str)
@@ -5790,6 +5812,7 @@ SWIFT_EOF
   chmod 755 "$_LSS_WIFI_HELPER/Contents/MacOS/LSS-WiFiScan"
   codesign --force --sign - "$_LSS_WIFI_HELPER" 2>/dev/null || \
     codesign --force --sign - "$_LSS_WIFI_HELPER/Contents/MacOS/LSS-WiFiScan" 2>/dev/null || true
+  echo "$APP_VERSION" > "${_LSS_WIFI_HELPER}.version"
   echo "  Wi-Fi scan helper built successfully."
   return 0
 }
@@ -5816,6 +5839,11 @@ run_wifi_scan_helper_macos() {
 
   local result
   result="$(cat "$tmp_result" 2>/dev/null)"
+  # Surface any scan error logged by the app
+  if [[ -f "${tmp_result}.err" ]]; then
+    echo "  [WiFi scan error: $(cat "${tmp_result}.err")]" >&2
+    rm -f "${tmp_result}.err"
+  fi
   rm -f "$tmp_result"
   echo "${result:-[]}"
 }
