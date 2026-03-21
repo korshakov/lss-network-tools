@@ -2,6 +2,7 @@
 
 ## In Progress / Recently Shipped
 
+- **v1.0.80** — Fix: airport missing on macOS 15+ no longer counts as an install health issue; system_profiler fallback added for wireless scan; Check Install Health now shows software versions (app, nmap, jq, python3, fpdf2, scapy, speedtest-cli)
 - **v1.0.79** — Startup dependency check now includes Task 17 wireless tools (airport on macOS, iw on Linux) as optional/non-blocking warnings; surfaced immediately after update relaunch so missing tools are not discovered mid-task
 - **v1.0.78** — Task 17: PDF renderer (summary table + per-room network detail, top 5), TXT renderer, About page entry, custom task note updated to 13–17; Install Health adds airport/iw check for Task 17
 - **v1.0.77** — Task 17: Wireless Site Survey — room-by-room Wi-Fi survey; verifies interface is wireless (prompts to switch if not); asks building/floor/room + AP presence (y/n) + optional AP label; scans and shows count + strongest network after each room; navigation menu to move room/floor/building or finish; outputs single JSON with full survey array. Not included in 000 audit.

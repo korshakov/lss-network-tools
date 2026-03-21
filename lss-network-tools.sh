@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.79"
+APP_VERSION="v1.0.80"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -412,22 +412,41 @@ check_install_health() {
   fi
 
   echo
-  echo "Task 17 - Wireless Site Survey"
-  echo "------------------------------"
+  echo "Software Versions"
+  echo "-----------------"
+  printf "%-20s %s\n" "lss-network-tools" "$APP_VERSION"
+  if command -v nmap >/dev/null 2>&1; then
+    printf "%-20s %s\n" "nmap" "$(nmap --version 2>/dev/null | head -1 | awk '{print $3}')"
+  fi
+  if command -v jq >/dev/null 2>&1; then
+    printf "%-20s %s\n" "jq" "$(jq --version 2>/dev/null)"
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    printf "%-20s %s\n" "python3" "$(python3 --version 2>/dev/null)"
+    printf "%-20s %s\n" "fpdf2" "$(python3 -c 'import fpdf; print(fpdf.__version__)' 2>/dev/null || echo 'not installed')"
+    printf "%-20s %s\n" "scapy" "$(python3 -c 'import scapy; print(scapy.__version__)' 2>/dev/null || echo 'not installed')"
+  fi
+  if command -v speedtest-cli >/dev/null 2>&1; then
+    printf "%-20s %s\n" "speedtest-cli" "$(speedtest-cli --version 2>/dev/null | head -1)"
+  fi
+
+  echo
+  echo "Task 17 - Wireless Site Survey (optional)"
+  echo "-----------------------------------------"
   if [[ "$OS" == "macos" ]]; then
     local airport_bin="/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport"
     if [[ -x "$airport_bin" ]]; then
       printf "${green}[OK]${reset} airport (wireless scan)\n"
+    elif command -v system_profiler >/dev/null 2>&1; then
+      printf "${green}[OK]${reset} system_profiler (wireless scan fallback — airport not available on this macOS version)\n"
     else
-      printf "${yellow}[WARN]${reset} airport binary not found — Task 17 wireless scan unavailable on this Mac\n"
-      issues=$((issues + 1))
+      printf "${yellow}[WARN]${reset} No wireless scan tool available — Task 17 unavailable on this Mac\n"
     fi
   else
     if command -v iw >/dev/null 2>&1; then
       printf "${green}[OK]${reset} iw (wireless scan)\n"
     else
       printf "${yellow}[WARN]${reset} iw not found — Task 17 wireless scan unavailable (install with: apt install iw)\n"
-      issues=$((issues + 1))
     fi
   fi
 
@@ -2104,8 +2123,10 @@ check_tools() {
     local airport_bin="/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport"
     if [[ -x "$airport_bin" ]]; then
       printf "${green}[OK]${reset} airport (wireless scan)\n"
+    elif command -v system_profiler >/dev/null 2>&1; then
+      printf "${green}[OK]${reset} system_profiler (wireless scan fallback — airport not available on this macOS version)\n"
     else
-      printf "${yellow}[WARN]${reset} airport not found — Task 17 wireless scan unavailable on this Mac\n"
+      printf "${yellow}[WARN]${reset} No wireless scan tool available — Task 17 unavailable on this Mac\n"
     fi
   else
     if command -v iw >/dev/null 2>&1; then
@@ -5417,6 +5438,11 @@ os_type = sys.argv[2]
 
 def scan_macos(iface):
     airport = "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport"
+    if os.path.isfile(airport) and os.access(airport, os.X_OK):
+        return _scan_macos_airport(airport)
+    return _scan_macos_system_profiler(iface)
+
+def _scan_macos_airport(airport):
     try:
         result = subprocess.run([airport, "-s"], capture_output=True, text=True, timeout=15)
         lines = result.stdout.split('\n')
@@ -5436,6 +5462,43 @@ def scan_macos(iface):
             channel  = rest[1] if len(rest) > 1 else ''
             security = ' '.join(rest[4:]) if len(rest) > 4 else 'Open'
             networks.append({'ssid': ssid, 'bssid': bssid, 'rssi_dbm': rssi, 'channel': channel, 'security': security})
+        return networks
+    except Exception:
+        return []
+
+def _scan_macos_system_profiler(iface):
+    try:
+        result = subprocess.run(
+            ['system_profiler', 'SPAirPortDataType', '-json'],
+            capture_output=True, text=True, timeout=30
+        )
+        data = json.loads(result.stdout)
+        networks = []
+        sec_map = {'wpa3': 'WPA3', 'wpa2': 'WPA2', 'wpa': 'WPA', 'open': 'Open', 'none': 'Open'}
+        for entry in (data.get('SPAirPortDataType') or []):
+            for wifi_iface in (entry.get('spairport_wireless_interfaces') or []):
+                cur = wifi_iface.get('spairport_wireless_current_network_information')
+                others = wifi_iface.get('spairport_wireless_other_local_wireless_networks') or []
+                all_nets = ([cur] if cur else []) + others
+                for net in all_nets:
+                    if not net:
+                        continue
+                    ssid = net.get('_name') or '(hidden)'
+                    rssi = net.get('spairport_wireless_network_signal_noise', 0)
+                    channel = str(net.get('spairport_wireless_network_channel', '')).split(',')[0]
+                    sec_raw = net.get('spairport_wireless_network_security_mode', '').lower()
+                    security = 'Open'
+                    for key, label in sec_map.items():
+                        if key in sec_raw:
+                            security = label
+                            break
+                    networks.append({
+                        'ssid': ssid,
+                        'bssid': net.get('spairport_wireless_network_bssid', '--') or '--',
+                        'rssi_dbm': int(rssi) if isinstance(rssi, (int, float)) else 0,
+                        'channel': channel,
+                        'security': security,
+                    })
         return networks
     except Exception:
         return []
