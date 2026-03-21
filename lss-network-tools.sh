@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.99"
+APP_VERSION="v1.1.0"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -5706,15 +5706,6 @@ func writeResult(_ str: String) {
     try? str.write(toFile: kOutput, atomically: false, encoding: .utf8)
 }
 
-func writeDebug(_ str: String) {
-    let path = kOutput + ".debug"
-    let line = str + "\n"
-    if let handle = FileHandle(forWritingAtPath: path) {
-        handle.seekToEndOfFile(); handle.write(line.data(using: .utf8)!); handle.closeFile()
-    } else {
-        try? line.write(toFile: path, atomically: false, encoding: .utf8)
-    }
-}
 
 func parseSignal(_ raw: Any?) -> (Int?, Int?) {
     guard let s = raw as? String else { return (nil, nil) }
@@ -5784,8 +5775,6 @@ func scanViaCoreWLAN() -> [[String: Any]] {
     } else {
         ifaces = [client.interface(withName: kIface)].compactMap { $0 }
     }
-    writeDebug("cwlan: \(ifaces.count) interface(s)")
-
     var results: [[String: Any]] = []
     for iface in ifaces {
         // Try a live scan first; fall back to background-scan cache if entitlements block it.
@@ -5793,14 +5782,11 @@ func scanViaCoreWLAN() -> [[String: Any]] {
         var networks: Set<CWNetwork>
         do {
             networks = try iface.scanForNetworks(withSSID: nil)
-            writeDebug("cwlan: \(iface.interfaceName ?? "?") live=\(networks.count)")
         } catch {
             networks = iface.cachedScanResults() ?? []
-            writeDebug("cwlan: \(iface.interfaceName ?? "?") scan failed(\(error.localizedDescription)), cached=\(networks.count)")
         }
         if networks.isEmpty {
             networks = iface.cachedScanResults() ?? []
-            writeDebug("cwlan: live was empty, cached=\(networks.count)")
         }
         for net in networks {
             let ssid  = net.ssid ?? "(hidden)"
@@ -5825,8 +5811,6 @@ func scanViaCoreWLAN() -> [[String: Any]] {
 
 func scanNetworks() {
     let results = scanViaCoreWLAN()
-    let first = results.first.flatMap { $0["ssid"] as? String } ?? "(none)"
-    writeDebug("networks found: \(results.count), first=\(first)")
     if let data = try? JSONSerialization.data(withJSONObject: results),
        let str  = String(data: data, encoding: .utf8) {
         writeResult(str)
@@ -5846,15 +5830,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate {
         if #available(macOS 11.0, *) { status = locationManager.authorizationStatus }
         else { status = CLLocationManager.authorizationStatus() }
         switch status {
-        case .authorizedAlways, .authorizedWhenInUse:
-            writeDebug("launch: authorized(\(status.rawValue)) -> scanning")
-            scanNetworks()
-        case .denied, .restricted:
-            writeDebug("launch: denied/restricted(\(status.rawValue))")
-            writeResult("[]"); NSApp.terminate(nil)
-        default:
-            writeDebug("launch: notDetermined(\(status.rawValue)) -> requesting")
-            locationManager.requestWhenInUseAuthorization()
+        case .authorizedAlways, .authorizedWhenInUse: scanNetworks()
+        case .denied, .restricted: writeResult("[]"); NSApp.terminate(nil)
+        default: locationManager.requestWhenInUseAuthorization()
         }
     }
 
@@ -5863,12 +5841,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate {
         if #available(macOS 11.0, *) { status = manager.authorizationStatus }
         else { status = CLLocationManager.authorizationStatus() }
         switch status {
-        case .authorizedAlways, .authorizedWhenInUse:
-            writeDebug("authChanged: authorized(\(status.rawValue)) -> scanning")
-            scanNetworks()
-        default:
-            writeDebug("authChanged: denied(\(status.rawValue))")
-            writeResult("[]"); NSApp.terminate(nil)
+        case .authorizedAlways, .authorizedWhenInUse: scanNetworks()
+        default: writeResult("[]"); NSApp.terminate(nil)
         }
     }
 }
@@ -5922,11 +5896,6 @@ run_wifi_scan_helper_macos() {
 
   local result
   result="$(cat "$tmp_result" 2>/dev/null)"
-  # Surface debug log if present (temporary, for troubleshooting)
-  if [[ -f "${tmp_result}.debug" ]]; then
-    echo "  [WiFi debug: $(cat "${tmp_result}.debug" | tr '\n' '|')]" >&2
-    rm -f "${tmp_result}.debug"
-  fi
   # Surface any scan error logged by the app
   if [[ -f "${tmp_result}.err" ]]; then
     echo "  [WiFi scan error: $(cat "${tmp_result}.err")]" >&2
