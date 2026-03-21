@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.98"
+APP_VERSION="v1.0.99"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -5788,11 +5788,21 @@ func scanViaCoreWLAN() -> [[String: Any]] {
 
     var results: [[String: Any]] = []
     for iface in ifaces {
-        // cachedScanResults() reads macOS background-scan cache — no scan entitlement needed.
-        // The app's Location Services auth lets it receive real SSIDs (not <redacted>).
-        let cached = iface.cachedScanResults() ?? []
-        writeDebug("cwlan: \(iface.interfaceName ?? "?") cached=\(cached.count)")
-        for net in cached {
+        // Try a live scan first; fall back to background-scan cache if entitlements block it.
+        // Both paths return real SSIDs because this app is location-authorized.
+        var networks: Set<CWNetwork>
+        do {
+            networks = try iface.scanForNetworks(withSSID: nil)
+            writeDebug("cwlan: \(iface.interfaceName ?? "?") live=\(networks.count)")
+        } catch {
+            networks = iface.cachedScanResults() ?? []
+            writeDebug("cwlan: \(iface.interfaceName ?? "?") scan failed(\(error.localizedDescription)), cached=\(networks.count)")
+        }
+        if networks.isEmpty {
+            networks = iface.cachedScanResults() ?? []
+            writeDebug("cwlan: live was empty, cached=\(networks.count)")
+        }
+        for net in networks {
             let ssid  = net.ssid ?? "(hidden)"
             let rssi  = net.rssiValue      // 0 when unknown
             let noise = net.noiseMeasurement
