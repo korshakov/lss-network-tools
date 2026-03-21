@@ -161,7 +161,7 @@ class Report(FPDF):
         ROW_H     = LINE_H + ROW_PAD * 2   # 7.5 mm per single-line row
 
         # Pre-measure row heights (values may wrap)
-        self.set_font("Helvetica", "", 9.5)
+        self.set_font("Helvetica", "", 8)
         row_heights = []
         for k, v in rows:
             val_str = safe(str(v or ""))
@@ -202,13 +202,13 @@ class Report(FPDF):
             mid_y = y + (row_h - LINE_H) / 2
 
             # Label in navy
-            self.set_font("Helvetica", "B", 7)
+            self.set_font("Helvetica", "B", 8)
             self.set_text_color(*C_NAV)
             self.set_xy(CARD_L + 8, mid_y)
             self.cell(LABEL_W, LINE_H, safe(k.upper() + ":"), align="L")
 
             # Value in dark navy
-            self.set_font("Helvetica", "", 9.5)
+            self.set_font("Helvetica", "", 8)
             self.set_text_color(*C_NAV)
             self.set_xy(CARD_L + 8 + LABEL_W, y + ROW_PAD)
             self.multi_cell(VAL_W, LINE_H, safe(str(v or "")), align="L",
