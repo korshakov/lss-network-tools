@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.1.8"
+APP_VERSION="v1.1.9"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -447,9 +447,10 @@ about_and_health() {
       issues=$((issues + 1))
     fi
     local tcc_val=""
+    local tcc_readable=0
     if command -v sqlite3 >/dev/null 2>&1; then
-      # User TCC.db holds dialog-granted Location approvals; system TCC.db holds MDM/admin grants.
-      # Derive the real user's home dir even when running as sudo.
+      # macOS SIP protects TCC.db from all processes without Full Disk Access (even the file owner).
+      # We try both user and system DBs and track whether sqlite3 could actually open either one.
       local real_home
       if [[ -n "${SUDO_USER:-}" ]]; then
         real_home="$(eval echo "~$SUDO_USER" 2>/dev/null)"
@@ -459,15 +460,21 @@ about_and_health() {
       local user_tcc_db="$real_home/Library/Application Support/com.apple.TCC/TCC.db"
       local sys_tcc_db="/Library/Application Support/com.apple.TCC/TCC.db"
       local q="SELECT auth_value FROM access WHERE service='kTCCServiceLocation' AND client='ie.lssolutions.wifi-scan';"
-      # Check user DB first (dialog grants live here), then fall back to system DB.
-      tcc_val="$(sqlite3 "$user_tcc_db" "$q" 2>/dev/null)" || tcc_val=""
-      if [[ -z "$tcc_val" ]] && [[ "$EUID" -eq 0 ]]; then
-        tcc_val="$(sqlite3 "$sys_tcc_db" "$q" 2>/dev/null)" || tcc_val=""
+      local out
+      out="$(sqlite3 "$user_tcc_db" "$q" 2>/dev/null)"
+      if [[ $? -eq 0 ]]; then
+        tcc_readable=1
+        tcc_val="$out"
+      fi
+      if [[ "$tcc_readable" -eq 0 ]]; then
+        out="$(sqlite3 "$sys_tcc_db" "$q" 2>/dev/null)"
+        if [[ $? -eq 0 ]]; then
+          tcc_readable=1
+          tcc_val="$out"
+        fi
       fi
     fi
-    if [[ -z "$tcc_val" ]] && ! command -v sqlite3 >/dev/null 2>&1; then
-      printf "${yellow}[WARN]${reset} Location Services status: sqlite3 not available\n"
-    else
+    if [[ "$tcc_readable" -eq 1 ]]; then
       case "$tcc_val" in
         2) printf "${green}[OK]${reset} Location Services authorized for LSS-WiFiScan\n" ;;
         0) printf "${red}[DENIED]${reset} Location Services denied — enable in System Settings → Privacy & Security → Location Services\n"
@@ -475,6 +482,10 @@ about_and_health() {
         "") printf "${yellow}[WARN]${reset} Location Services not yet requested — run a Wireless Site Survey to authorize\n" ;;
         *) printf "${yellow}[WARN]${reset} Location Services status unknown (code $tcc_val)\n" ;;
       esac
+    else
+      # TCC.db is SIP-protected; sqlite3 cannot open it without Full Disk Access.
+      # Treat as informational only — if a wireless survey has returned results, it is authorized.
+      printf "       Location Services: cannot verify (TCC.db requires Full Disk Access)\n"
     fi
   else
     if command -v iw >/dev/null 2>&1; then

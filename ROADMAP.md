@@ -2,6 +2,7 @@
 
 ## In Progress / Recently Shipped
 
+- **v1.1.9** — Fix false-positive "Location Services not yet requested": macOS SIP prevents sqlite3 from opening TCC.db without Full Disk Access (even as root/owner); distinguish exit-code failure (can't read) from empty query result (not requested); show neutral info line instead of [WARN] when the DB is unreadable
 - **v1.1.8** — Fix false-positive "Location Services not yet requested" in About & Install Health: user dialog grants are stored in the user's TCC.db (~/.../TCC.db), not the system one (/Library/.../TCC.db); check user DB first (deriving home from SUDO_USER when running as sudo), fall back to system DB
 - **v1.1.7** — PDF fixes: Floor column widened (16→22mm, Room 24→20mm, Strongest 46→44mm); custom task note corrected to "13–16" (task 17 is wireless survey, listed separately); remediation hints now suppressed for "completed with warnings" findings (LDAP, NFS, Printer, VLAN)
 - **v1.1.6** — Merge About/System Info and Check Install Health into single "About & Install Health" screen (option 5); startup menu reduced from 7 to 6 items
