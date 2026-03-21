@@ -153,12 +153,12 @@ class Report(FPDF):
 
         CARD_W    = 84                       # ~50% of original 166 mm
         CARD_L    = (210 - CARD_W) // 2     # centred on A4 (63 mm)
-        CARD_TOP  = NAVY_H + 10
+        CARD_TOP  = NAVY_H + 4
         LABEL_W   = 30          # uppercase label column
         VAL_W     = CARD_W - LABEL_W - 18   # value column (36 mm)
         LINE_H    = 5.5
-        ROW_PAD   = 4           # top + bottom padding inside each row
-        ROW_H     = LINE_H + ROW_PAD * 2   # 13.5 mm per single-line row
+        ROW_PAD   = 1           # top + bottom padding inside each row
+        ROW_H     = LINE_H + ROW_PAD * 2   # 7.5 mm per single-line row
 
         # Pre-measure row heights (values may wrap)
         self.set_font("Helvetica", "", 9.5)
