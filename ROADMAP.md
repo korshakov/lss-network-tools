@@ -2,6 +2,7 @@
 
 ## In Progress / Recently Shipped
 
+- **v1.0.92** — Wireless survey: re-add build-if-missing fallback at survey start for cases where install/update build was skipped (e.g. upgrading from pre-v1.0.91, or swiftc missing at install time); build happens before first question, not mid-scan
 - **v1.0.91** — Build LSS-WiFiScan.app at install/update time (not on first survey run); added --build-wifi-helper CLI flag; install.sh calls it after deploy; perform_installed_update calls it after file copy; removed build step from wireless_site_survey()
 - **v1.0.90** — Fix LSS-WiFiScan.app Swift build: CWNetwork has no public .security property (removed switch, security field set to "--"); add explicit .bandUnknown/.widthUnknown enum cases to fix exhaustiveness warnings
 - **v1.0.89** — Wireless scan: replace CLLocationManager swift script (produces disappearing banner) with a proper compiled macOS app bundle (LSS-WiFiScan.app); app uses CoreWLAN for scanning + shows a real modal Location Services dialog; built once with swiftc, cached at /usr/local/share/lss-network-tools/; appears as "LSS WiFi Scan" in System Settings → Location Services
