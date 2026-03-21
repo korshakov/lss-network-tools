@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.86"
+APP_VERSION="v1.0.87"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -5683,37 +5683,58 @@ print("timeout")
 exit(1)
 SWIFT_EOF
 
-  echo ""
-  echo "  Requesting Location Services access for Terminal..."
-  echo "  A macOS dialog will appear — click OK to allow."
-  echo ""
+  local tmp_result run_as=""
+  tmp_result="$(mktemp /tmp/lss-loc-result-XXXXXX.txt)"
 
-  local result run_as=""
   if [[ "$(id -u)" == "0" ]] && [[ -n "${SUDO_USER:-}" ]]; then
     run_as="$SUDO_USER"
   fi
 
+  # Run the Swift location request in the background so we can show
+  # guidance immediately. macOS shows the request as a notification banner
+  # (not a blocking dialog) — the user must click it before it disappears.
   if [[ -n "$run_as" ]]; then
-    result="$(sudo -u "$run_as" "$swift_bin" "$tmp_swift" 2>/dev/null)"
+    sudo -u "$run_as" "$swift_bin" "$tmp_swift" > "$tmp_result" 2>/dev/null &
   else
-    result="$("$swift_bin" "$tmp_swift" 2>/dev/null)"
+    "$swift_bin" "$tmp_swift" > "$tmp_result" 2>/dev/null &
   fi
-  rm -f "$tmp_swift"
+  local swift_pid=$!
+
+  echo ""
+  echo "  Requesting Location Services access..."
+  echo ""
+
+  # Show a GUI dialog so the user knows to look for the notification banner.
+  # The banner appears at the top-right of the screen and disappears in a few seconds.
+  osascript -e 'display dialog "macOS is requesting location access for Terminal.\n\nA notification banner appeared at the top-right of your screen.\n\nClick it and choose Allow — then come back here." buttons {"OK"} default button "OK" with title "LSS Network Tools"' 2>/dev/null || true
+
+  # Wait for Swift to finish (user clicked Allow/Deny in the banner)
+  wait "$swift_pid" 2>/dev/null || true
+  local result
+  result="$(cat "$tmp_result" 2>/dev/null)"
+  rm -f "$tmp_swift" "$tmp_result"
 
   case "$result" in
     granted|already_granted)
-      echo "  Location Services: granted."
+      echo "  Location Services: granted. SSIDs will now be visible."
       return 0
       ;;
     denied*)
-      echo "  Location Services was denied. SSIDs may still be redacted."
-      echo "  Enable Terminal in System Settings → Privacy & Security → Location Services"
-      echo "  then press Enter to continue."
+      echo ""
+      echo "  Location Services was denied."
+      echo "  Go to System Settings → Privacy & Security → Location Services"
+      echo "  and enable Terminal, then press Enter to continue."
+      open "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices" 2>/dev/null || true
       read -r _dummy
       return 1
       ;;
     *)
-      echo "  Location Services dialog timed out or was not shown."
+      echo ""
+      echo "  Location Services request timed out — the notification banner may have been missed."
+      echo "  Go to System Settings → Privacy & Security → Location Services"
+      echo "  and enable Terminal, then press Enter to continue."
+      open "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices" 2>/dev/null || true
+      read -r _dummy
       return 1
       ;;
   esac
