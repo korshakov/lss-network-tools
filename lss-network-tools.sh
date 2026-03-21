@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.81"
+APP_VERSION="v1.0.82"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -5431,7 +5431,7 @@ run_wireless_scan() {
   local tmp_py rc
   tmp_py="$(mktemp /tmp/lss-wifi-scan-XXXXXX.py)"
   cat > "$tmp_py" <<'PYEOF'
-import sys, json, subprocess, re
+import sys, json, subprocess, re, os
 
 iface   = sys.argv[1]
 os_type = sys.argv[2]

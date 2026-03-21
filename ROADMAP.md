@@ -2,6 +2,7 @@
 
 ## In Progress / Recently Shipped
 
+- **v1.0.82** — Fix wireless scan: missing "import os" in embedded Python script caused NameError on os.path.isfile check; silently returned empty networks array
 - **v1.0.81** — Fix wireless scan on macOS: system_profiler parser rewritten with correct field names (spairport_airport_interfaces, spairport_airport_other_local_wireless_networks, spairport_signal_noise, spairport_network_channel, spairport_security_mode); RSSI parsed from "-46 dBm / -96 dBm" string; channel extracted from "36 (5GHz, 20MHz)"; duplicate SSID deduplication via seen set
 - **v1.0.80** — Fix: airport missing on macOS 15+ no longer counts as an install health issue; system_profiler fallback added for wireless scan; Check Install Health now shows software versions (app, nmap, jq, python3, fpdf2, scapy, speedtest-cli)
 - **v1.0.79** — Startup dependency check now includes Task 17 wireless tools (airport on macOS, iw on Linux) as optional/non-blocking warnings; surfaced immediately after update relaunch so missing tools are not discovered mid-task
