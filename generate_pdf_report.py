@@ -1162,7 +1162,11 @@ def main():
     # ── Executive Summary ──────────────────────────────────────────────────
     pdf.add_page()
     pdf.section_title("Executive Summary - Key Findings")
-    findings = findings_data.get("findings") or []
+    _SEV_ORDER = {"high": 0, "warning": 1, "info": 2, "advice": 3}
+    findings = sorted(
+        findings_data.get("findings") or [],
+        key=lambda f: _SEV_ORDER.get(f.get("severity", "info").lower(), 99),
+    )
     if not findings:
         pdf.note("No notable findings were generated from this scan set.")
     else:
