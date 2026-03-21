@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.78"
+APP_VERSION="v1.0.79"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -2096,6 +2096,23 @@ check_tools() {
     echo
     echo "Optional fallback missing: ifconfig"
     echo "Install with: apt install net-tools"
+  fi
+
+  echo
+  echo "Optional - Task 17 Wireless Site Survey:"
+  if [[ "$OS" == "macos" ]]; then
+    local airport_bin="/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport"
+    if [[ -x "$airport_bin" ]]; then
+      printf "${green}[OK]${reset} airport (wireless scan)\n"
+    else
+      printf "${yellow}[WARN]${reset} airport not found — Task 17 wireless scan unavailable on this Mac\n"
+    fi
+  else
+    if command -v iw >/dev/null 2>&1; then
+      printf "${green}[OK]${reset} iw (wireless scan)\n"
+    else
+      printf "${yellow}[WARN]${reset} iw not found — Task 17 wireless scan unavailable (install with: apt install iw)\n"
+    fi
   fi
 
   if [[ "$missing" -eq 1 ]]; then

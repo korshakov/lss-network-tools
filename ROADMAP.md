@@ -2,6 +2,7 @@
 
 ## In Progress / Recently Shipped
 
+- **v1.0.79** — Startup dependency check now includes Task 17 wireless tools (airport on macOS, iw on Linux) as optional/non-blocking warnings; surfaced immediately after update relaunch so missing tools are not discovered mid-task
 - **v1.0.78** — Task 17: PDF renderer (summary table + per-room network detail, top 5), TXT renderer, About page entry, custom task note updated to 13–17; Install Health adds airport/iw check for Task 17
 - **v1.0.77** — Task 17: Wireless Site Survey — room-by-room Wi-Fi survey; verifies interface is wireless (prompts to switch if not); asks building/floor/room + AP presence (y/n) + optional AP label; scans and shows count + strongest network after each room; navigation menu to move room/floor/building or finish; outputs single JSON with full survey array. Not included in 000 audit.
 - **v1.0.76** — Startup menu: About (option 5) now shows Python version and task count (total/audit/custom); Install Health (option 6) expanded to match startup dependency check (adds awk, sed, grep, find, mktemp, python3, python3-scapy, python3-fpdf2)
