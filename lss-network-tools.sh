@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.75"
+APP_VERSION="v1.0.76"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -280,6 +280,12 @@ is_installed_mode() {
 }
 
 display_system_info() {
+  local audit_count custom_count total_count python_version
+  audit_count="$(echo "$(get_audit_task_ids)" | wc -w | tr -d ' ')"
+  total_count="$(get_task_ids | wc -w | tr -d ' ')"
+  custom_count=$(( total_count - audit_count ))
+  python_version="$(python3 --version 2>/dev/null || echo "not found")"
+
   echo
   echo "About / System Info"
   echo "==================="
@@ -296,6 +302,9 @@ display_system_info() {
   echo "Temp Root: $TMP_ROOT"
   echo "User: $(id -un 2>/dev/null || echo unknown)"
   echo "Effective UID: $EUID"
+  echo "Python: $python_version"
+  echo
+  echo "Tasks: $total_count total ($audit_count core audit, $custom_count custom)"
 }
 
 check_install_health() {
@@ -367,7 +376,7 @@ check_install_health() {
     issues=$((issues + 1))
   fi
 
-  tools_to_check=(nmap jq speedtest-cli tcpdump)
+  tools_to_check=(nmap jq speedtest-cli tcpdump awk sed grep find mktemp python3)
   if [[ "$OS" == "macos" ]]; then
     tools_to_check+=(ipconfig ifconfig route networksetup ping)
   else
@@ -385,6 +394,21 @@ check_install_health() {
       issues=$((issues + 1))
     fi
   done
+
+  if command -v python3 >/dev/null 2>&1; then
+    if python3 -c "import scapy" 2>/dev/null; then
+      printf "${green}[OK]${reset} python3-scapy\n"
+    else
+      printf "${red}[MISSING]${reset} python3-scapy\n"
+      issues=$((issues + 1))
+    fi
+    if python3 -c "import fpdf" 2>/dev/null; then
+      printf "${green}[OK]${reset} python3-fpdf2\n"
+    else
+      printf "${red}[MISSING]${reset} python3-fpdf2\n"
+      issues=$((issues + 1))
+    fi
+  fi
 
   echo
   if [[ "$issues" -eq 0 ]]; then
