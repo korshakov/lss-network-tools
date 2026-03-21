@@ -2,6 +2,7 @@
 
 ## In Progress / Recently Shipped
 
+- **v1.2.8** — PDF cover page: metadata card scaled to ~50% width (84mm, centred) while keeping font size unchanged; label column narrowed to 30mm
 - **v1.2.7** — Executive Summary findings sorted by severity: high → warning → info → advice
 - **v1.2.6** — Comprehensive set -e audit: guard all unsafe variable assignments with || true or || return 1 — mktemp in backup/update (4 calls), eval echo in about_and_health, cat /sys/class/dmi in VM detection, cat version file in WiFi helper, dig/host/nslookup in hostname resolution, cat stderr log in DHCP test
 - **v1.2.5** — Fix set -e crash in build_wifi_scan_helper_macos: command -v swiftc exits 1 when Xcode CLT not installed, killing the script before the missing-swiftc check could run; add || true. Reduce startup update check timeout 3s → 2s to limit offline startup delay

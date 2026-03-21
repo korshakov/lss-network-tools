@@ -151,11 +151,11 @@ class Report(FPDF):
         if self.prepared_by:
             rows.append(("Prepared By", self.prepared_by))
 
-        CARD_L    = 22
-        CARD_W    = 166
+        CARD_W    = 84                       # ~50% of original 166 mm
+        CARD_L    = (210 - CARD_W) // 2     # centred on A4 (63 mm)
         CARD_TOP  = NAVY_H + 10
-        LABEL_W   = 40          # uppercase label column
-        VAL_W     = CARD_W - LABEL_W - 18   # value column (108 mm)
+        LABEL_W   = 30          # uppercase label column
+        VAL_W     = CARD_W - LABEL_W - 18   # value column (36 mm)
         LINE_H    = 5.5
         ROW_PAD   = 4           # top + bottom padding inside each row
         ROW_H     = LINE_H + ROW_PAD * 2   # 13.5 mm per single-line row
