@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.3"
+APP_VERSION="v1.2.4"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -1557,14 +1557,10 @@ startup_menu() {
     printf "${yellow}LSS Network Tools${reset}\n"
     printf "${yellow}=================${reset}\n"
     echo
-    # Show update banner if background check found a newer version
-    if [[ -n "${_LSS_UPDATE_FILE:-}" ]] && [[ -f "$_LSS_UPDATE_FILE" ]]; then
-      local _latest_ver
-      _latest_ver="$(cat "$_LSS_UPDATE_FILE" 2>/dev/null)"
-      if [[ -n "$_latest_ver" ]]; then
-        printf "${green}[UPDATE AVAILABLE]${reset} ${_latest_ver} is available (you have ${APP_VERSION}) — select option 4 to update\n"
-        echo
-      fi
+    # Show update banner if a newer version was found at startup
+    if [[ -n "${_LSS_UPDATE_BANNER:-}" ]]; then
+      printf "${green}[UPDATE AVAILABLE]${reset} ${_LSS_UPDATE_BANNER} is available (you have ${APP_VERSION}) — select option 4 to update\n"
+      echo
     fi
     echo "1) Run LSS Network Tools"
     echo "2) Build LSS Network Tools Report From Previous Run"
@@ -1743,6 +1739,14 @@ append_findings_summary() {
     count="$(jq -r '(.servers // []) | length' "$file" 2>/dev/null)"
     if [[ "$count" =~ ^[0-9]+$ ]] && (( count > 0 )); then
       findings_json="$(append_finding_record "$findings_json" "info" "DNS services were detected on the local network" "The DNS scan identified $count host(s) with DNS-related ports open." "dns-scan.json")"
+    fi
+  fi
+
+  file="$(task_output_path 7 2>/dev/null || true)"
+  if json_file_usable "$file"; then
+    count="$(jq -r '(.servers // []) | length' "$file" 2>/dev/null)"
+    if [[ "$count" =~ ^[0-9]+$ ]] && (( count > 0 )); then
+      findings_json="$(append_finding_record "$findings_json" "info" "Active Directory / LDAP services detected on the local network" "The LDAP/AD scan identified $count host(s) with directory service ports open (Kerberos, LDAP, LDAPS, or Global Catalog). Confirm these are expected domain controllers for this site." "ldap-ad-scan.json")"
     fi
   fi
 
@@ -2051,7 +2055,6 @@ finalize_run() {
     rm -f "$SESSION_DEBUG_LOG" 2>/dev/null || true
   fi
 
-  rm -f "${_LSS_UPDATE_FILE:-}" 2>/dev/null || true
 }
 
 warn_if_not_root() {
@@ -8277,20 +8280,16 @@ warn_if_not_root
 initialize_debug_logging
 trap finalize_run EXIT
 
-# Kick off a silent background update check — result written to a temp file
+# Quick synchronous update check (3s timeout) — result stored in variable
 # and displayed as a banner in startup_menu if a newer version is available.
-_LSS_UPDATE_FILE="$(mktemp /tmp/lss-upd-XXXXXX 2>/dev/null || true)"
-if [[ -n "$_LSS_UPDATE_FILE" ]]; then
-  (
-    latest="$(curl --max-time 4 -fsSL \
-      "https://api.github.com/repos/${APP_GITHUB_REPO}/tags?per_page=10" 2>/dev/null \
-      | jq -r '.[].name' 2>/dev/null | sort -V | tail -n 1)" || true
-    if [[ -n "$latest" ]] && [[ "$latest" != "$APP_VERSION" ]]; then
-      printf "%s" "$latest" > "$_LSS_UPDATE_FILE"
-    else
-      rm -f "$_LSS_UPDATE_FILE"
-    fi
-  ) &
+_LSS_UPDATE_BANNER=""
+if command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+  _latest_tag="$(curl --max-time 3 -fsSL \
+    "https://api.github.com/repos/${APP_GITHUB_REPO}/tags?per_page=10" 2>/dev/null \
+    | jq -r '.[].name' 2>/dev/null | sort -V | tail -n 1)" || true
+  if [[ -n "$_latest_tag" ]] && [[ "$_latest_tag" != "$APP_VERSION" ]]; then
+    _LSS_UPDATE_BANNER="$_latest_tag"
+  fi
 fi
 
 while true; do

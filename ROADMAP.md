@@ -2,6 +2,7 @@
 
 ## In Progress / Recently Shipped
 
+- **v1.2.4** — Fix missing LDAP/AD finding: no finding was ever written to findings.json for task 7, making the LDAP remediation hint dead code; add INFO finding when LDAP/AD servers are found. Fix update banner timing: switch from background subshell (too slow) to synchronous curl --max-time 3 so banner shows on first menu render
 - **v1.2.3** — Fix About & Install Health quitting instead of returning to menu: set -e caused script exit when sqlite3 failed (authorization denied on TCC.db) and when cat version file didn't exist; fix by putting sqlite3 calls inside if conditions (set -e exempt) and adding || true to cat assignment
 - **v1.2.2** — PDF: Page X of Y in footer (alias_nb_pages); startup update notification: background curl check on launch, green [UPDATE AVAILABLE] banner shown in startup menu if newer GitHub release found, temp file cleaned up on exit
 - **v1.2.1** — PDF accuracy: fix 7 boolean fields rendered as literal "True"/"False" text — Rogue DHCP Suspected (Task 4), Tagged Frames Observed / Trunk Port Suspected / CDP/LLDP Exposure / Multiple VLANs Visible (Task 11), DNS Service Working / Recursion Available (Task 16) — all now use kv_flag() for coloured Yes/No display
