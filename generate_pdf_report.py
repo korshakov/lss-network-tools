@@ -709,8 +709,17 @@ def render_vlan_trunk(pdf, data):
     else:
         pdf.note("LLDP Neighbours: none detected")
 
-    probe = data.get("double_tag_probe", "not attempted")
-    pdf.kv("Double-Tag Probe", probe, shade=False)
+    probe = data.get("double_tag_probe") or {}
+    if isinstance(probe, dict):
+        if not probe.get("attempted", False):
+            probe_str = "Not attempted"
+        elif probe.get("vulnerable"):
+            probe_str = "Vulnerable"
+        else:
+            probe_str = "Attempted — not vulnerable"
+    else:
+        probe_str = str(probe)
+    pdf.kv("Double-Tag Probe", probe_str, shade=False)
 
 
 def render_duplicate_ip(pdf, data):
