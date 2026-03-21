@@ -853,10 +853,6 @@ def render_wireless_survey(pdf, data):
     pdf.set_text_color(*C_DGR)
     pdf.cell(0, 5, "  Room Detail  (top 5 networks by signal strength)", new_x="LMARGIN", new_y="NEXT")
 
-    # Network table column widths (170 mm)
-    NC = [54, 42, 20, 16, 38]
-    N_HDRS = ["SSID", "BSSID", "Signal", "Channel", "Security"]
-
     for room in survey:
         building = room.get("building") or "--"
         floor    = room.get("floor")    or "--"
@@ -899,7 +895,10 @@ def render_wireless_survey(pdf, data):
             pdf.set_text_color(*C_DGR)
             continue
 
-        # Network table header
+        # Network table — cols: SSID, Signal, Ch, Band, Width, PHY, Security (170mm)
+        NC    = [50, 18, 10, 14, 14, 32, 32]
+        N_HDRS= ["SSID", "Signal", "Ch", "Band", "Width", "PHY Mode", "Security"]
+
         pdf.set_fill_color(*C_NAV)
         pdf.set_text_color(*C_WHT)
         pdf.set_font("Helvetica", "B", 7)
@@ -914,12 +913,19 @@ def render_wireless_survey(pdf, data):
                 pdf.set_fill_color(*C_LGR)
             pdf.set_font("Helvetica", "", 7)
             pdf.set_text_color(*C_DGR)
+            rssi  = net.get("rssi_dbm")
+            noise = net.get("noise_floor_dbm")
+            sig   = f"{rssi} dBm" if rssi else "--"
+            if noise:
+                sig += f" / {noise}"
             row_vals = [
-                net.get("ssid")    or "(hidden)",
-                net.get("bssid")   or "--",
-                f"{net.get('rssi_dbm', '--')} dBm",
-                str(net.get("channel") or "--"),
-                net.get("security") or "--",
+                net.get("ssid")          or "(hidden)",
+                sig,
+                str(net.get("channel")   or "--"),
+                net.get("band")          or "--",
+                net.get("channel_width") or "--",
+                net.get("phy_mode")      or "--",
+                net.get("security")      or "--",
             ]
             pdf.set_x(20)
             for w, v in zip(NC, row_vals):

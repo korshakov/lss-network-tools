@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.83"
+APP_VERSION="v1.0.84"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -5490,40 +5490,71 @@ def _scan_macos_system_profiler(iface):
         )
         data = json.loads(result.stdout)
         networks = []
+
         def parse_sec(raw):
             raw = (raw or '').lower()
-            if 'wpa3' in raw:     return 'WPA3'
+            if 'wpa3' in raw:       return 'WPA3'
             if 'enterprise' in raw: return 'WPA2-Enterprise'
-            if 'wpa2' in raw:     return 'WPA2'
-            if 'wpa' in raw:      return 'WPA'
+            if 'wpa2' in raw:       return 'WPA2'
+            if 'wpa' in raw:        return 'WPA'
             return 'Open'
-        def parse_rssi(raw):
-            # e.g. "-46 dBm / -96 dBm"
+
+        def parse_signal(raw):
+            # e.g. "-46 dBm / -96 dBm" -> rssi=-46, noise=-96
             try:
-                return int(str(raw).split()[0])
+                parts = str(raw).split('/')
+                rssi  = int(parts[0].split()[0])
+                noise = int(parts[1].split()[0]) if len(parts) > 1 else None
+                return rssi, noise
             except (ValueError, IndexError):
-                return 0
-        def parse_channel(raw):
-            # e.g. "36 (5GHz, 20MHz)"
-            return str(raw).split()[0] if raw else ''
-        seen = set()
+                return 0, None
+
+        def parse_channel_info(raw):
+            # e.g. "36 (5GHz, 160MHz)" -> channel="36", band="5GHz", width="160MHz"
+            raw = str(raw) if raw else ''
+            channel = raw.split()[0] if raw else ''
+            band, width = '', ''
+            m = re.search(r'\(([^)]+)\)', raw)
+            if m:
+                parts = [p.strip() for p in m.group(1).split(',')]
+                for p in parts:
+                    if 'GHz' in p: band  = p
+                    if 'MHz' in p: width = p
+            return channel, band, width
+
+        def norm_phy(raw):
+            raw = (raw or '').lower()
+            if 'ax' in raw: return '802.11ax (Wi-Fi 6)'
+            if 'ac' in raw: return '802.11ac (Wi-Fi 5)'
+            if 'n'  in raw: return '802.11n (Wi-Fi 4)'
+            if 'a'  in raw: return '802.11a'
+            if 'g'  in raw: return '802.11g'
+            if 'b'  in raw: return '802.11b'
+            return raw or 'unknown'
+
         for entry in (data.get('SPAirPortDataType') or []):
             for wifi_iface in (entry.get('spairport_airport_interfaces') or []):
+                # Skip non-Wi-Fi interfaces (awdl0, p2p0, etc.)
+                if wifi_iface.get('_name') != iface:
+                    continue
                 cur    = wifi_iface.get('spairport_current_network_information')
                 others = wifi_iface.get('spairport_airport_other_local_wireless_networks') or []
                 for net in ([cur] if cur else []) + others:
                     if not net:
                         continue
                     ssid = net.get('_name') or '(hidden)'
-                    if ssid in seen:
-                        continue
-                    seen.add(ssid)
+                    rssi, noise = parse_signal(net.get('spairport_signal_noise'))
+                    channel, band, width = parse_channel_info(net.get('spairport_network_channel'))
                     networks.append({
-                        'ssid':     ssid,
-                        'bssid':    '--',
-                        'rssi_dbm': parse_rssi(net.get('spairport_signal_noise')),
-                        'channel':  parse_channel(net.get('spairport_network_channel')),
-                        'security': parse_sec(net.get('spairport_security_mode')),
+                        'ssid':            ssid,
+                        'bssid':           '--',
+                        'rssi_dbm':        rssi,
+                        'noise_floor_dbm': noise,
+                        'channel':         channel,
+                        'band':            band,
+                        'channel_width':   width,
+                        'phy_mode':        norm_phy(net.get('spairport_network_phymode')),
+                        'security':        parse_sec(net.get('spairport_security_mode')),
                     })
         return networks
     except Exception:
@@ -5540,7 +5571,8 @@ def scan_linux(iface):
                 if current:
                     networks.append(current)
                 bssid = s.split()[1].split('(')[0].lower()
-                current = {'ssid': '', 'bssid': bssid, 'rssi_dbm': 0, 'channel': '', 'security': 'Open'}
+                current = {'ssid': '', 'bssid': bssid, 'rssi_dbm': 0, 'noise_floor_dbm': None,
+                           'channel': '', 'band': '', 'channel_width': '', 'phy_mode': '', 'security': 'Open'}
             elif current is None:
                 continue
             elif s.startswith('SSID:'):
@@ -5553,6 +5585,11 @@ def scan_linux(iface):
             elif '* primary channel:' in s:
                 try:
                     current['channel'] = s.split(':')[1].strip()
+                except IndexError:
+                    pass
+            elif '* channel width:' in s:
+                try:
+                    current['channel_width'] = s.split(':')[1].strip()
                 except IndexError:
                     pass
             elif s.startswith('RSN:') or 'WPA2' in s:
@@ -7608,13 +7645,15 @@ render_wireless_site_survey_report() {
         (if ((.networks // []) | length) == 0 then
           "  No networks detected."
         else
-          "  " + (["SSID","BSSID","Signal","Channel","Security"] | join("  |  ")),
+          "  " + (["SSID","Signal","Ch","Band","Width","PHY Mode","Security"] | join("  |  ")),
           (.networks // [] | sort_by(.rssi_dbm) | reverse | .[0:5][] |
             "  " + ([
               (.ssid // "(hidden)"),
-              (.bssid // "--"),
-              ((.rssi_dbm | tostring) + " dBm"),
+              (((.rssi_dbm | tostring) + " dBm") + (if .noise_floor_dbm then " / " + (.noise_floor_dbm | tostring) else "" end)),
               ("ch " + (.channel | tostring)),
+              (.band // "--"),
+              (.channel_width // "--"),
+              (.phy_mode // "--"),
               (.security // "--")
             ] | join("  |  ")))
         end),
