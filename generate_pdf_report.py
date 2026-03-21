@@ -789,6 +789,146 @@ def render_custom_dns_assessment(pdf, data, index):
         pdf.kv(k, v, shade=i % 2 == 0)
 
 
+def render_wireless_survey(pdf, data):
+    pdf.subsection_title("17. Wireless Site Survey")
+    survey    = data.get("survey") or []
+    iface     = data.get("interface") or "unknown"
+    n_rooms   = data.get("rooms_scanned", len(survey))
+
+    pdf.kv("Interface",     iface,   shade=False)
+    pdf.kv("Rooms Scanned", n_rooms, shade=True)
+
+    if not survey:
+        pdf.note("No room data recorded.")
+        return
+
+    # ── Summary table ────────────────────────────────────────────────────
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_text_color(*C_DGR)
+    pdf.cell(0, 5, "  Survey Summary", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(1)
+
+    # Column widths (total 170 mm)
+    SC = [8, 30, 16, 24, 10, 22, 14, 46]   # #, Building, Floor, Room, AP, Label, Nets, Strongest
+    HDRS = ["#", "Building", "Floor", "Room / Area", "AP", "AP Label", "Nets", "Strongest Signal"]
+
+    pdf.set_fill_color(*C_NAV)
+    pdf.set_text_color(*C_WHT)
+    pdf.set_font("Helvetica", "B", 7)
+    pdf.set_x(20)
+    for w, h in zip(SC, HDRS):
+        pdf.cell(w, 6, safe(f" {h}"), fill=True)
+    pdf.ln()
+
+    for idx, room in enumerate(survey):
+        nets    = room.get("networks") or []
+        top     = sorted(nets, key=lambda n: n.get("rssi_dbm", -999), reverse=True)[:1]
+        strongest = f"{top[0]['ssid']} ({top[0]['rssi_dbm']} dBm)" if top else "--"
+        ap_flag = "Yes" if room.get("ap_present") else "No"
+        ap_lbl  = room.get("ap_label") or "--"
+        row_vals = [
+            str(idx + 1),
+            room.get("building") or "--",
+            room.get("floor")    or "--",
+            room.get("room")     or "--",
+            ap_flag,
+            ap_lbl,
+            str(len(nets)),
+            strongest,
+        ]
+        shade = idx % 2 == 0
+        if shade:
+            pdf.set_fill_color(*C_LGR)
+        pdf.set_font("Helvetica", "", 7)
+        pdf.set_text_color(*C_DGR)
+        pdf.set_x(20)
+        for w, v in zip(SC, row_vals):
+            pdf.cell(w, 5, safe(f" {v}"), fill=shade)
+        pdf.ln()
+
+    # ── Per-room detail ──────────────────────────────────────────────────
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_text_color(*C_DGR)
+    pdf.cell(0, 5, "  Room Detail  (top 5 networks by signal strength)", new_x="LMARGIN", new_y="NEXT")
+
+    # Network table column widths (170 mm)
+    NC = [54, 42, 20, 16, 38]
+    N_HDRS = ["SSID", "BSSID", "Signal", "Channel", "Security"]
+
+    for room in survey:
+        building = room.get("building") or "--"
+        floor    = room.get("floor")    or "--"
+        rm       = room.get("room")     or "--"
+        ap_txt   = "Yes" if room.get("ap_present") else "No"
+        ap_lbl   = room.get("ap_label") or "--"
+        nets     = room.get("networks") or []
+        top5     = sorted(nets, key=lambda n: n.get("rssi_dbm", -999), reverse=True)[:5]
+
+        pdf.ln(3)
+        # Room header bar
+        pdf.set_fill_color(*C_SBL)
+        pdf.set_text_color(*C_NAV)
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.cell(0, 6, safe(f"  {building}  |  Floor: {floor}  |  {rm}"), fill=True,
+                 new_x="LMARGIN", new_y="NEXT")
+        pdf.set_text_color(*C_DGR)
+
+        pdf.set_font("Helvetica", "", 7.5)
+        pdf.set_x(20)
+        pdf.cell(30, 5, safe("  AP Present:"))
+        pdf.set_font("Helvetica", "B", 7.5)
+        pdf.set_text_color(*(C_HGH if room.get("ap_present") else C_ADV))
+        pdf.cell(20, 5, safe(ap_txt), new_x="LMARGIN", new_y="NEXT")
+        pdf.set_text_color(*C_DGR)
+
+        if ap_lbl and ap_lbl != "--":
+            pdf.set_font("Helvetica", "", 7.5)
+            pdf.set_x(20)
+            pdf.cell(30, 5, safe("  AP Label:"))
+            pdf.set_font("Helvetica", "B", 7.5)
+            pdf.cell(60, 5, safe(ap_lbl), new_x="LMARGIN", new_y="NEXT")
+
+        pdf.ln(1)
+
+        if not top5:
+            pdf.set_font("Helvetica", "I", 7)
+            pdf.set_text_color(*C_MGR)
+            pdf.cell(0, 4, "  No networks detected in this room.", new_x="LMARGIN", new_y="NEXT")
+            pdf.set_text_color(*C_DGR)
+            continue
+
+        # Network table header
+        pdf.set_fill_color(*C_NAV)
+        pdf.set_text_color(*C_WHT)
+        pdf.set_font("Helvetica", "B", 7)
+        pdf.set_x(20)
+        for w, h in zip(NC, N_HDRS):
+            pdf.cell(w, 5, safe(f" {h}"), fill=True)
+        pdf.ln()
+
+        for ni, net in enumerate(top5):
+            shade = ni % 2 == 0
+            if shade:
+                pdf.set_fill_color(*C_LGR)
+            pdf.set_font("Helvetica", "", 7)
+            pdf.set_text_color(*C_DGR)
+            row_vals = [
+                net.get("ssid")    or "(hidden)",
+                net.get("bssid")   or "--",
+                f"{net.get('rssi_dbm', '--')} dBm",
+                str(net.get("channel") or "--"),
+                net.get("security") or "--",
+            ]
+            pdf.set_x(20)
+            for w, v in zip(NC, row_vals):
+                pdf.cell(w, 5, safe(f" {v}"), fill=shade)
+            pdf.ln()
+
+    pdf.set_text_color(*C_DGR)
+
+
 # ── About This Report page ────────────────────────────────────────────────
 TASK_DESCRIPTIONS = [
     (  1, "Interface & Network Info",
@@ -836,12 +976,17 @@ TASK_DESCRIPTIONS = [
        "Scans the entire network using ARP to find any IP address being claimed by more than "
        "one device. Duplicate IPs cause intermittent connectivity issues and can indicate "
        "IP address conflicts or ARP spoofing."),
+    ( 17, "Wireless Site Survey",
+       "A room-by-room Wi-Fi survey of the site. For each room the auditor records whether an "
+       "access point is physically present, its label, and a live scan of all visible networks "
+       "including signal strength, channel, and security mode. Designed for walk-through surveys "
+       "of schools, offices, and multi-floor buildings."),
 ]
 
 CUSTOM_TASK_NOTE = (
-    "Additional tasks (13–16) may also appear in this report: custom port scans and stress tests "
-    "against specific target devices, identity resolution, and DNS resolver assessment. These are "
-    "run selectively based on the scope agreed with the client."
+    "Additional tasks (13–17) may also appear in this report: custom port scans and stress tests "
+    "against specific target devices, identity resolution, DNS resolver assessment, and wireless "
+    "site survey. These are run selectively based on the scope agreed with the client."
 )
 
 
@@ -957,12 +1102,12 @@ def render_about_report(pdf, ran_task_ids=None):
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(*C_MGR)
     pdf.set_x(20)
-    custom_ran = ran_task_ids is not None and bool(ran_task_ids & {13, 14, 15, 16})
+    custom_ran = ran_task_ids is not None and bool(ran_task_ids & {13, 14, 15, 16, 17})
     if custom_ran:
         footer_note = (
-            "Custom tasks (13\u201316) were also run as part of this engagement and appear "
+            "Custom tasks (13\u201317) were also run as part of this engagement and appear "
             "in the audit results section: custom port scans, stress tests, identity "
-            "resolution, and DNS resolver assessment."
+            "resolution, DNS resolver assessment, and wireless site survey."
         )
     else:
         footer_note = CUSTOM_TASK_NOTE
@@ -1065,6 +1210,8 @@ def main():
         if d := load_json(p): render_custom_identity(pdf, d, i)
     for i, p in enumerate(all_task_json_paths(run_dir, manifest, 16), 1):
         if d := load_json(p): render_custom_dns_assessment(pdf, d, i)
+
+    if d := get(17): render_wireless_survey(pdf, d)
 
     # ── Output path ────────────────────────────────────────────────────────
     if pdf_path_override:

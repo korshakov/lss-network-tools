@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.0.77"
+APP_VERSION="v1.0.78"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -407,6 +407,26 @@ check_install_health() {
       printf "${green}[OK]${reset} python3-fpdf2\n"
     else
       printf "${red}[MISSING]${reset} python3-fpdf2\n"
+      issues=$((issues + 1))
+    fi
+  fi
+
+  echo
+  echo "Task 17 - Wireless Site Survey"
+  echo "------------------------------"
+  if [[ "$OS" == "macos" ]]; then
+    local airport_bin="/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport"
+    if [[ -x "$airport_bin" ]]; then
+      printf "${green}[OK]${reset} airport (wireless scan)\n"
+    else
+      printf "${yellow}[WARN]${reset} airport binary not found — Task 17 wireless scan unavailable on this Mac\n"
+      issues=$((issues + 1))
+    fi
+  else
+    if command -v iw >/dev/null 2>&1; then
+      printf "${green}[OK]${reset} iw (wireless scan)\n"
+    else
+      printf "${yellow}[WARN]${reset} iw not found — Task 17 wireless scan unavailable (install with: apt install iw)\n"
       issues=$((issues + 1))
     fi
   fi
@@ -1231,6 +1251,7 @@ build_report_for_current_run() {
         14) render_custom_target_stress_report "$file_path" "$report_file" ;;
         15) render_custom_target_identity_report "$file_path" "$report_file" ;;
         16) render_custom_target_dns_assessment_report "$file_path" "$report_file" ;;
+        17) render_wireless_site_survey_report "$file_path" "$report_file" ;;
       esac
 
       echo >> "$report_file"
@@ -7429,6 +7450,72 @@ render_duplicate_ip_report() {
   } >> "$report_file"
 }
 
+
+render_wireless_site_survey_report() {
+  local file="$1"
+  local report_file="$2"
+  local status rooms_scanned iface
+
+  status="$(jq -r '.status // "success"' "$file" 2>/dev/null)"
+  iface="$(jq -r '.interface // "unknown"' "$file" 2>/dev/null)"
+  rooms_scanned="$(jq -r '.rooms_scanned // 0' "$file" 2>/dev/null)"
+
+  {
+    echo "Status:        ${status:-unknown}"
+    echo "Interface:     ${iface}"
+    echo "Rooms Scanned: ${rooms_scanned}"
+    echo ""
+
+    local room_count
+    room_count="$(jq '.survey | length' "$file" 2>/dev/null || echo 0)"
+    if [[ "$room_count" -eq 0 ]]; then
+      echo "No room data recorded."
+    else
+      echo "SURVEY SUMMARY"
+      echo "--------------"
+      printf "%-3s  %-20s  %-8s  %-16s  %-3s  %-12s  %-5s  %s\n" \
+        "#" "Building" "Floor" "Room / Area" "AP" "AP Label" "Nets" "Strongest Signal"
+      jq -r '.survey | to_entries[] |
+        (.key + 1 | tostring) as $n |
+        .value as $r |
+        ($r.networks // [] | sort_by(.rssi_dbm) | reverse | .[0]) as $top |
+        (if $top then ($top.ssid + " (" + ($top.rssi_dbm | tostring) + " dBm, ch " + ($top.channel | tostring) + ", " + $top.security + ")") else "--" end) as $sig |
+        [$n,
+         ($r.building // "--"),
+         ($r.floor // "--"),
+         ($r.room // "--"),
+         (if $r.ap_present then "Yes" else "No" end),
+         ($r.ap_label // "--"),
+         (($r.networks // []) | length | tostring),
+         $sig] |
+        @tsv' "$file" 2>/dev/null | awk -F'\t' '{printf "%-3s  %-20s  %-8s  %-16s  %-3s  %-12s  %-5s  %s\n", $1,$2,$3,$4,$5,$6,$7,$8}' || true
+      echo ""
+
+      echo "ROOM DETAIL  (top 5 networks by signal strength)"
+      echo "------------------------------------------------"
+      jq -r '.survey[] |
+        "Building: " + (.building // "--") + " | Floor: " + (.floor // "--") + " | Room: " + (.room // "--"),
+        "AP Present: " + (if .ap_present then "Yes" else "No" end),
+        (if .ap_label then "AP Label:   " + .ap_label else empty end),
+        "Timestamp:  " + (.timestamp // "--"),
+        "",
+        (if ((.networks // []) | length) == 0 then
+          "  No networks detected."
+        else
+          "  " + (["SSID","BSSID","Signal","Channel","Security"] | join("  |  ")),
+          (.networks // [] | sort_by(.rssi_dbm) | reverse | .[0:5][] |
+            "  " + ([
+              (.ssid // "(hidden)"),
+              (.bssid // "--"),
+              ((.rssi_dbm | tostring) + " dBm"),
+              ("ch " + (.channel | tostring)),
+              (.security // "--")
+            ] | join("  |  ")))
+        end),
+        ""' "$file" 2>/dev/null || true
+    fi
+  } >> "$report_file"
+}
 
 get_task_ids() {
   awk -F'|' 'NF {print $1}' <<< "$TASKS_DATA" | paste -sd' ' -

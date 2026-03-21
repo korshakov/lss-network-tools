@@ -2,6 +2,7 @@
 
 ## In Progress / Recently Shipped
 
+- **v1.0.78** — Task 17: PDF renderer (summary table + per-room network detail, top 5), TXT renderer, About page entry, custom task note updated to 13–17; Install Health adds airport/iw check for Task 17
 - **v1.0.77** — Task 17: Wireless Site Survey — room-by-room Wi-Fi survey; verifies interface is wireless (prompts to switch if not); asks building/floor/room + AP presence (y/n) + optional AP label; scans and shows count + strongest network after each room; navigation menu to move room/floor/building or finish; outputs single JSON with full survey array. Not included in 000 audit.
 - **v1.0.76** — Startup menu: About (option 5) now shows Python version and task count (total/audit/custom); Install Health (option 6) expanded to match startup dependency check (adds awk, sed, grep, find, mktemp, python3, python3-scapy, python3-fpdf2)
 - **v1.0.75** — About This Report: custom task footer note now says "were also run" when tasks 13-16 actually ran (was always "may appear"); added comment explaining ran_task_ids or None fallback
@@ -99,6 +100,7 @@ Compare a run against the previous run for the same client/location. Flag: new o
 
 | Version | Feature |
 |---------|---------|
+| v1.0.78 | Task 17 report integration: PDF summary table + per-room detail (top 5), TXT renderer, About page entry, install health airport/iw check |
 | v1.0.77 | Task 17: Wireless Site Survey — room-by-room Wi-Fi survey with building/floor/room navigation, AP presence tracking, and per-room network scan |
 | v1.0.76 | Startup About and Install Health updated to reflect full current dependency and task set |
 | v1.0.75 | About page: custom task note adapts to whether tasks 13-16 actually ran |
