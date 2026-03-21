@@ -204,13 +204,13 @@ class Report(FPDF):
             # Label in navy
             self.set_font("Helvetica", "B", 7)
             self.set_text_color(*C_NAV)
-            self.set_xy(CARD_L + 11, mid_y)
-            self.cell(LABEL_W, LINE_H, safe(k.upper()), align="L")
+            self.set_xy(CARD_L + 8, mid_y)
+            self.cell(LABEL_W, LINE_H, safe(k.upper() + ":"), align="L")
 
             # Value in muted grey, multi_cell to handle wrapping
             self.set_font("Helvetica", "", 9.5)
             self.set_text_color(*C_MGR)
-            self.set_xy(CARD_L + 11 + LABEL_W, y + ROW_PAD)
+            self.set_xy(CARD_L + 8 + LABEL_W, y + ROW_PAD)
             self.multi_cell(VAL_W, LINE_H, safe(str(v or "")), align="L",
                             new_x="LMARGIN", new_y="NEXT")
             y += row_h
