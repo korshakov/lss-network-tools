@@ -2,6 +2,7 @@
 
 ## In Progress / Recently Shipped
 
+- **v1.2.17** — PDF: switch entire document font to Inter (bundled TTF in assets/fonts/); Regular, Bold, Italic variants included
 - **v1.2.16** — PDF: revert font back to Helvetica (Times and Courier trialled, neither preferred)
 - **v1.2.15** — PDF: switch entire document font from Courier to Times
 - **v1.2.14** — PDF: switch entire document font from Helvetica to Courier (monospace terminal aesthetic)
