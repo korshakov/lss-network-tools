@@ -421,6 +421,53 @@ EOF
   chmod 644 "$APP_TARGET_DIR/install.env"
 }
 
+write_completions() {
+  local zsh_dir=""
+  local bash_dir=""
+
+  if [[ "$OS" == "macos" ]]; then
+    zsh_dir="/usr/local/share/zsh/site-functions"
+    bash_dir="/usr/local/etc/bash_completion.d"
+  else
+    zsh_dir="/usr/local/share/zsh/site-functions"
+    bash_dir="/etc/bash_completion.d"
+  fi
+
+  if [[ -d "$zsh_dir" ]] || mkdir -p "$zsh_dir" 2>/dev/null; then
+    print_substep "Installing zsh completion to $zsh_dir/_${APP_NAME}"
+    cat > "$zsh_dir/_${APP_NAME}" <<'EOF'
+#compdef lss-network-tools
+
+_lss-network-tools() {
+  local -a opts
+  opts=(
+    '--version:Print version and exit'
+    '--update:Check for and install updates'
+    '--uninstall:Uninstall the application'
+    '--build-wifi-helper:Build the Wi-Fi scan helper'
+    '--debug:Enable debug output'
+  )
+  _describe 'options' opts
+}
+
+_lss-network-tools "$@"
+EOF
+    chmod 644 "$zsh_dir/_${APP_NAME}"
+  fi
+
+  if [[ -d "$bash_dir" ]] || mkdir -p "$bash_dir" 2>/dev/null; then
+    print_substep "Installing bash completion to $bash_dir/$APP_NAME"
+    cat > "$bash_dir/$APP_NAME" <<'EOF'
+_lss_network_tools_completions() {
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  COMPREPLY=($(compgen -W "--version --update --uninstall --build-wifi-helper --debug" -- "$cur"))
+}
+complete -F _lss_network_tools_completions lss-network-tools
+EOF
+    chmod 644 "$bash_dir/$APP_NAME"
+  fi
+}
+
 write_wrapper() {
   print_substep "Creating command wrapper at $WRAPPER_PATH"
   mkdir -p "$(dirname "$WRAPPER_PATH")"
@@ -453,8 +500,7 @@ print_install_summary() {
 
   printf "${green}[install] Run: sudo %s${reset}\n" "$APP_NAME"
   printf "${green}[install] Uninstall later with: sudo %s --uninstall${reset}\n" "$APP_NAME"
-  printf "${green}[install] If command completion does not work immediately, open a new shell.${reset}\n"
-  printf "${green}[install] For zsh, you can also run: rehash && autoload -Uz compinit && compinit${reset}\n"
+  printf "${green}[install] Tab completion installed for zsh and bash. Open a new shell to activate it.${reset}\n"
   append_install_audit_log "install" "success" "Application deployed to ${APP_TARGET_DIR}"
 }
 
@@ -482,5 +528,6 @@ install_dependencies
 prepare_target_directories
 deploy_application_files
 write_wrapper
+write_completions
 build_wifi_scan_helper
 print_install_summary

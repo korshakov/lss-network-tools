@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.36"
+APP_VERSION="v1.2.37"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -876,6 +876,11 @@ uninstall_installed_application() {
   if [[ "$OS" == "linux" ]]; then
     rm -rf "$DATA_ROOT"
   fi
+
+  # Remove shell completions
+  rm -f "/usr/local/share/zsh/site-functions/_lss-network-tools" 2>/dev/null || true
+  rm -f "/usr/local/etc/bash_completion.d/lss-network-tools" 2>/dev/null || true
+  rm -f "/etc/bash_completion.d/lss-network-tools" 2>/dev/null || true
 
   # Remove Location Services TCC entry for LSS-WiFiScan.app (macOS only)
   if [[ "$OS" == "macos" ]]; then
