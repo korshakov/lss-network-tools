@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.37"
+APP_VERSION="v1.2.38"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -34,6 +34,7 @@ UNINSTALL_MODE=0
 VERSION_MODE=0
 UPDATE_MODE=0
 BUILD_WIFI_HELPER_MODE=0
+WRITE_COMPLETIONS_MODE=0
 
 OS=""
 SELECTED_INTERFACE=""
@@ -730,6 +731,7 @@ if [[ -d "\$SOURCE_ROOT/assets" ]]; then
   done
 fi
 bash "\$SCRIPT_PATH" --build-wifi-helper 2>/dev/null || true
+bash "\$SCRIPT_PATH" --write-completions 2>/dev/null || true
 REPORTED_VERSION="\$(bash "\$SCRIPT_PATH" --version 2>/dev/null || true)"
 mkdir -p "\$(dirname "\$AUDIT_LOG_PATH")"
 if [[ "\$REPORTED_VERSION" != "${APP_NAME} $remote_tag" ]]; then
@@ -800,6 +802,50 @@ check_for_updates() {
   echo
   echo "An update is available."
   perform_installed_update "$remote_tag"
+}
+
+write_completion_files() {
+  local zsh_dir="/usr/local/share/zsh/site-functions"
+  local bash_dir
+  if [[ "$OS" == "macos" ]]; then
+    bash_dir="/usr/local/etc/bash_completion.d"
+  else
+    bash_dir="/etc/bash_completion.d"
+  fi
+
+  mkdir -p "$zsh_dir" 2>/dev/null || true
+  if [[ -w "$zsh_dir" ]]; then
+    cat > "$zsh_dir/_lss-network-tools" <<'ZSHCOMP'
+#compdef lss-network-tools
+
+_lss-network-tools() {
+  local -a opts
+  opts=(
+    '--version:Print version and exit'
+    '--update:Check for and install updates'
+    '--uninstall:Uninstall the application'
+    '--build-wifi-helper:Build the Wi-Fi scan helper'
+    '--debug:Enable debug output'
+  )
+  _describe 'options' opts
+}
+
+_lss-network-tools "$@"
+ZSHCOMP
+    chmod 644 "$zsh_dir/_lss-network-tools"
+  fi
+
+  mkdir -p "$bash_dir" 2>/dev/null || true
+  if [[ -w "$bash_dir" ]]; then
+    cat > "$bash_dir/lss-network-tools" <<'BASHCOMP'
+_lss_network_tools_completions() {
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  COMPREPLY=($(compgen -W "--version --update --uninstall --build-wifi-helper --debug" -- "$cur"))
+}
+complete -F _lss_network_tools_completions lss-network-tools
+BASHCOMP
+    chmod 644 "$bash_dir/lss-network-tools"
+  fi
 }
 
 uninstall_installed_application() {
@@ -909,9 +955,12 @@ parse_args() {
       --build-wifi-helper)
         BUILD_WIFI_HELPER_MODE=1
         ;;
+      --write-completions)
+        WRITE_COMPLETIONS_MODE=1
+        ;;
       *)
         echo "Unknown option: $1"
-        echo "Usage: lss-network-tools [--debug] [--uninstall] [--update] [--version] [--build-wifi-helper]"
+        echo "Usage: lss-network-tools [--debug] [--uninstall] [--update] [--version] [--build-wifi-helper] [--write-completions]"
         exit 1
         ;;
     esac
@@ -8353,6 +8402,11 @@ if [[ "$BUILD_WIFI_HELPER_MODE" -eq 1 ]]; then
   configure_runtime_paths
   build_wifi_scan_helper_macos
   exit $?
+fi
+if [[ "$WRITE_COMPLETIONS_MODE" -eq 1 ]]; then
+  detect_os
+  write_completion_files
+  exit 0
 fi
 detect_os
 ensure_standard_path
