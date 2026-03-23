@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.26"
+APP_VERSION="v1.2.27"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -1436,7 +1436,7 @@ build_report_from_previous_run() {
 
   read -r -p "Choose run: " choice
   if [[ "$choice" == "0" ]]; then
-    return 0
+    return 2
   fi
   if [[ ! "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#run_dirs[@]} )); then
     echo "Invalid selection. Returning to main menu."
@@ -1472,7 +1472,7 @@ build_report_from_previous_run() {
       mkdir -p "$export_dir" 2>/dev/null || true
       ;;
     3)
-      return 0
+      return 2
       ;;
     *)
       echo "Invalid selection. Returning to main menu."
@@ -1580,8 +1580,11 @@ startup_menu() {
       2)
         clear_screen_if_supported
         build_report_from_previous_run
-        echo
-        read -r -p "Press Enter to return to the startup menu..." _
+        _brc=$?
+        if [[ "$_brc" -ne 2 ]]; then
+          echo
+          read -r -p "Press Enter to return to the startup menu..." _
+        fi
         ;;
       3)
         clear_screen_if_supported
