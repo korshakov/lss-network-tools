@@ -8305,7 +8305,7 @@ while true; do
   if [[ -n "$RUN_OUTPUT_DIR" ]] && [[ -n "$(find "$RUN_OUTPUT_DIR" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null)" ]]; then
     echo
     read -r -p "Save report? [y/N]: " _save_choice
-    if [[ "${_save_choice,,}" == "y" ]]; then
+    if [[ "$_save_choice" == "y" || "$_save_choice" == "Y" ]]; then
       finalize_run
     else
       rm -rf "$RUN_OUTPUT_DIR" 2>/dev/null || true
