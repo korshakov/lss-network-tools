@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.35"
+APP_VERSION="v1.2.36"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -271,6 +271,12 @@ initialize_debug_logging() {
   # piped through tee when relaunched after an update via exec sudo.
   if [[ -t 0 ]]; then
     OUTPUT_IS_TTY=1
+  fi
+
+  if [[ ! -w "$OUTPUT_DIR" ]]; then
+    echo "This program must be run with elevated privileges."
+    echo "Please run: sudo lss-network-tools"
+    exit 1
   fi
 
   SESSION_DEBUG_LOG="$OUTPUT_DIR/.debug-session-$$.txt"
