@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.33"
+APP_VERSION="v1.2.34"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -1413,7 +1413,7 @@ build_report_from_previous_run() {
   fi
 
   echo
-  echo "Build A Report From Past Runs"
+  echo "Build A Report From Previous Run"
   echo "============================="
   echo
   for run_dir in "${run_dirs[@]}"; do
@@ -1737,7 +1737,7 @@ startup_menu() {
       echo
     fi
     echo "1) Run LSS Network Tools"
-    echo "2) Build A Report From Past Runs"
+    echo "2) Build A Report From Previous Run"
     echo "3) Edit Previous Runs"
     echo "4) View Data From Previous Run"
     echo "5) Check For Updates"
