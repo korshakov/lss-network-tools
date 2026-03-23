@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.32"
+APP_VERSION="v1.2.33"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -1663,6 +1663,64 @@ delete_all_previous_runs() {
   echo "All previous runs have been deleted."
 }
 
+view_previous_run_data() {
+  local run_dirs=()
+  local run_dir=""
+  local idx=1
+  local choice=""
+  local label=""
+  local txt_file=""
+
+  while IFS= read -r run_dir; do
+    [[ -n "$run_dir" ]] && run_dirs+=("$run_dir")
+  done < <(list_all_run_dirs)
+
+  echo
+  echo "View Data From Previous Run"
+  echo "==========================="
+  echo
+
+  if [[ "${#run_dirs[@]}" -eq 0 ]]; then
+    echo "No previous runs found."
+    echo
+    read -r -p "Press Enter to return to the main menu..." _
+    return 0
+  fi
+
+  for run_dir in "${run_dirs[@]}"; do
+    label="$(run_dir_label "$run_dir")"
+    echo "$idx) $label"
+    idx=$((idx + 1))
+  done
+  echo "0) Back To Main Menu"
+  echo
+  read -r -p "Choose run: " choice
+
+  case "$choice" in
+    0) return 0 ;;
+    *)
+      if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#run_dirs[@]} )); then
+        run_dir="${run_dirs[$((choice - 1))]}"
+        txt_file="$(find "$run_dir" -maxdepth 1 -type f -name '*.txt' ! -name 'debug.txt' | sort | tail -n 1)"
+        if [[ -z "$txt_file" ]]; then
+          echo
+          echo "No report file found for this run."
+          echo
+          read -r -p "Press Enter to return to the main menu..." _
+        else
+          echo
+          cat "$txt_file"
+          echo
+          read -r -p "Press Enter to return to the main menu..." _
+        fi
+      else
+        echo "Invalid selection."
+        sleep 1
+      fi
+      ;;
+  esac
+}
+
 startup_menu() {
   local choice=""
   local yellow='\033[1;33m'
@@ -1675,15 +1733,16 @@ startup_menu() {
     echo
     # Show update banner if a newer version was found at startup
     if [[ -n "${_LSS_UPDATE_BANNER:-}" ]]; then
-      printf "${green}[UPDATE AVAILABLE]${reset} ${_LSS_UPDATE_BANNER} is available (you have ${APP_VERSION}) — select option 4 to update\n"
+      printf "${green}[UPDATE AVAILABLE]${reset} ${_LSS_UPDATE_BANNER} is available (you have ${APP_VERSION}) — select option 5 to update\n"
       echo
     fi
     echo "1) Run LSS Network Tools"
     echo "2) Build A Report From Past Runs"
     echo "3) Edit Previous Runs"
-    echo "4) Check For Updates"
-    echo "5) About & Install Health"
-    echo "6) Exit"
+    echo "4) View Data From Previous Run"
+    echo "5) Check For Updates"
+    echo "6) About & Install Health"
+    echo "7) Exit"
     echo
 
     read -r -p "Choose option: " choice
@@ -1705,17 +1764,21 @@ startup_menu() {
         ;;
       4)
         clear_screen_if_supported
+        view_previous_run_data || true
+        ;;
+      5)
+        clear_screen_if_supported
         check_for_updates
         echo
         read -r -p "Press Enter to return to the startup menu..." _
         ;;
-      5)
+      6)
         clear_screen_if_supported
         about_and_health
         echo
         read -r -p "Press Enter to return to the startup menu..." _
         ;;
-      6) exit 0 ;;
+      7) exit 0 ;;
       *)
         echo "Invalid selection. Try again."
         sleep 1
