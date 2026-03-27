@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.40"
+APP_VERSION="v1.2.41"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -3021,6 +3021,16 @@ get_gateway_ip() {
   fi
 }
 
+is_rfc1918_ip() {
+  local ip="$1"
+  local a b c
+  IFS='.' read -r a b c _ <<< "$ip"
+  [[ "$a" -eq 10 ]] && return 0
+  [[ "$a" -eq 172 && "$b" -ge 16 && "$b" -le 31 ]] && return 0
+  [[ "$a" -eq 192 && "$b" -eq 168 ]] && return 0
+  return 1
+}
+
 get_interface_network_cidr() {
   local iface="$1"
   local details=""
@@ -4451,7 +4461,7 @@ write_gateway_scan_json() {
     ports=("${rest[@]:0:split_index}")
     warnings=("${rest[@]:$((split_index + 1))}")
   else
-    ports=("${rest[@]}")
+    ports=(${rest[@]+"${rest[@]}"})
   fi
 
   warnings_json="$(json_string_array_from_array warnings)"
@@ -4462,7 +4472,7 @@ write_gateway_scan_json() {
     --arg error_code "$error_code" \
     --arg error_message "$error_message" \
     --arg gateway_ip "$gateway_ip" \
-    --argjson open_ports "$(ports_to_json_array "${ports[@]}")" \
+    --argjson open_ports "$(ports_to_json_array ${ports[@]+"${ports[@]}"})" \
     --argjson warnings "$warnings_json" \
     '{
       status: $status,
@@ -4721,6 +4731,10 @@ gateway_details() {
   echo "Done."
   echo
   echo "Gateway IP: $gateway_ip"
+  if ! is_rfc1918_ip "$gateway_ip"; then
+    echo "Warning: Gateway IP $gateway_ip is publicly routable — this device is likely enterprise or carrier infrastructure not designed to serve a local LAN directly. The port scan may be filtered or time out."
+    warnings+=("Gateway IP $gateway_ip is publicly routable. This suggests the device is enterprise or carrier infrastructure (e.g. a core router or firewall) sitting directly on the LAN without a NAT boundary. Port scanning such devices is likely to be filtered or rate-limited, and results may be incomplete.")
+  fi
   echo
   echo "Stage 2: Scanning gateway ports (this may take up to 1 minute)..."
 
@@ -4779,9 +4793,9 @@ gateway_details() {
   fi
 
   if [[ "${#warnings[@]}" -gt 0 ]]; then
-    write_gateway_scan_json "$status" "$success" "$error_code" "$error_message" "$gateway_ip" "${ports[@]}" "__WARNINGS__" "${warnings[@]}"
+    write_gateway_scan_json "$status" "$success" "$error_code" "$error_message" "$gateway_ip" ${ports[@]+"${ports[@]}"} "__WARNINGS__" "${warnings[@]}"
   else
-    write_gateway_scan_json "$status" "$success" "$error_code" "$error_message" "$gateway_ip" "${ports[@]}"
+    write_gateway_scan_json "$status" "$success" "$error_code" "$error_message" "$gateway_ip" ${ports[@]+"${ports[@]}"}
   fi
   echo "Saved JSON: $(task_output_path 3)"
 }
@@ -4894,7 +4908,7 @@ custom_target_port_scan() {
     --argjson warnings "$warnings_json" \
     --arg target_ip "$target_ip" \
     --arg hostname "$hostname" \
-    --argjson open_ports "$(ports_to_json_array "${ports[@]}")" \
+    --argjson open_ports "$(ports_to_json_array ${ports[@]+"${ports[@]}"})" \
     '{
       status: $status,
       success: $success,
@@ -7198,7 +7212,7 @@ dhcp_network_scan() {
     fi
 
     offer_count="$(printf '%s\n' "${raw_server_ids[@]}" | awk -v target="$server" '$0 == target {count++} END {print count+0}')"
-    classification="$(classify_dhcp_server "$server" "$gateway_ip" "${open_ports[@]}")"
+    classification="$(classify_dhcp_server "$server" "$gateway_ip" ${open_ports[@]+"${open_ports[@]}"})"
     if [[ "$classification" == "unknown" ]]; then
       suspected_rogue=true
       rogue_detected=true
@@ -7220,7 +7234,7 @@ dhcp_network_scan() {
 
     jq \
       --arg ip "$server" \
-      --argjson open_ports "$(ports_to_json_array "${open_ports[@]}")" \
+      --argjson open_ports "$(ports_to_json_array ${open_ports[@]+"${open_ports[@]}"})" \
       --argjson offers_observed "$(count_unique_offer_keys_for_server "$server" "${unique_offer_keys[@]:-}")" \
       --argjson raw_offers_observed "$offer_count" \
       --arg classification "$classification" \
