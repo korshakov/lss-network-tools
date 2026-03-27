@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.46"
+APP_VERSION="v1.2.47"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -1644,10 +1644,72 @@ delete_all_previous_runs() {
   echo "All previous runs have been deleted."
 }
 
+task_has_corrupt_json() {
+  local task_id="$1"
+  local file_path file_glob
+
+  if task_supports_multiple_entries "$task_id"; then
+    file_glob="$(task_output_glob "$task_id")"
+    while IFS= read -r file_path; do
+      [[ -n "$file_path" ]] && ! json_file_usable "$file_path" && return 0
+    done < <(find "$(current_output_dir)" -maxdepth 1 -type f -name "$file_glob" 2>/dev/null)
+  else
+    file_path="$(task_output_path "$task_id")"
+    [[ -f "$file_path" ]] && ! json_file_usable "$file_path" && return 0
+  fi
+  return 1
+}
+
+check_continue_run_network() {
+  local run_dir="$1"
+  local info_file="$run_dir/interface-network-info.json"
+  local stored_gateway stored_network current_gateway current_network
+
+  if ! json_file_usable "$info_file"; then
+    return 0
+  fi
+
+  stored_gateway="$(jq -r '.gateway // empty' "$info_file" 2>/dev/null)"
+  stored_network="$(jq -r '.network // empty' "$info_file" 2>/dev/null)"
+
+  [[ -z "$stored_gateway" && -z "$stored_network" ]] && return 0
+
+  current_gateway="$(get_gateway_ip "$SELECTED_INTERFACE" 2>/dev/null || true)"
+  current_network="$(get_interface_network_cidr "$SELECTED_INTERFACE" 2>/dev/null || true)"
+
+  if [[ "$current_gateway" == "$stored_gateway" && "$current_network" == "$stored_network" ]]; then
+    return 0
+  fi
+
+  local yellow='\033[1;33m'
+  local reset='\033[0m'
+  echo
+  printf "${yellow}Warning: You appear to be on a different network than this run was started on.${reset}\n"
+  echo
+  printf "  %-12s %-28s %s\n" "" "Original Run" "Current"
+  printf "  %-12s %-28s %s\n" "Gateway:" "${stored_gateway:-unknown}" "${current_gateway:-unknown}"
+  printf "  %-12s %-28s %s\n" "Network:" "${stored_network:-unknown}" "${current_network:-unknown}"
+  echo
+  echo "Continuing on a different network will mix results from two different"
+  echo "networks in the same report, which may be misleading."
+  echo
+  echo "1) Start a fresh new run on this network"
+  echo "2) Continue this run as-is"
+  echo "0) Cancel"
+  echo
+  local choice
+  read -r -p "Choose option: " choice
+  case "$choice" in
+    1) return 2 ;;
+    2) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 continue_run_from_dir() {
   local run_dir="$1"
-  local missing_ids=()
-  local task_id title confirm
+  local pending_ids=()
+  local task_id title
 
   local previous_output_dir="${RUN_OUTPUT_DIR:-}"
   local previous_report_file="${RUN_REPORT_FILE:-}"
@@ -1663,128 +1725,146 @@ continue_run_from_dir() {
   local previous_selected_interface="${SELECTED_INTERFACE:-}"
   local previous_session_debug="${SESSION_DEBUG_LOG:-}"
 
+  _restore_continue_state() {
+    RUN_OUTPUT_DIR="$previous_output_dir"
+    RUN_REPORT_FILE="$previous_report_file"
+    RUN_DEBUG_LOG="$previous_debug_log"
+    RUN_MANIFEST_FILE="$previous_manifest_file"
+    RUN_LOCATION="$previous_location"
+    RUN_CLIENT_NAME="$previous_client"
+    RUN_NOTE="$previous_note"
+    RUN_LOCATION_SLUG="$previous_location_slug"
+    RUN_CLIENT_SLUG="$previous_client_slug"
+    RUN_NOTE_SLUG="$previous_note_slug"
+    RUN_DATE_STAMP="$previous_date_stamp"
+    SELECTED_INTERFACE="$previous_selected_interface"
+    SESSION_DEBUG_LOG="$previous_session_debug"
+  }
+
   RUN_OUTPUT_DIR="$run_dir"
   RUN_DEBUG_LOG="$run_dir/debug.txt"
   RUN_MANIFEST_FILE="$run_dir/manifest.json"
   SESSION_DEBUG_LOG="$RUN_DEBUG_LOG"
   load_run_metadata_from_dir "$run_dir"
 
-  local green='\033[0;32m'
-  local reset='\033[0m'
+  # Fix 2: network mismatch check
+  local net_check
+  check_continue_run_network "$run_dir"
+  net_check=$?
+  if [[ "$net_check" -ne 0 ]]; then
+    _restore_continue_state
+    return 0
+  fi
 
-  for task_id in $(get_audit_task_ids); do
-    if [[ -z "$(task_json_files "$task_id")" ]]; then
-      missing_ids+=("$task_id")
-    fi
-  done
+  local green='\033[0;32m'
+  local red='\033[0;31m'
+  local reset='\033[0m'
+  local has_corrupt=0
 
   echo
   echo "Audit Task Status:"
   echo
-  for task_id in $(get_audit_task_ids); do
+
+  # Fix 5: show all tasks (1-17), Fix 3: three states — complete/corrupt/missing
+  for task_id in $(get_task_ids); do
     title="$(task_title "$task_id")"
-    if [[ -z "$(task_json_files "$task_id")" ]]; then
-      printf "  [ ] %s) %s\n" "$task_id" "$title"
-    else
+    if [[ -n "$(task_json_files "$task_id")" ]]; then
       printf "  ${green}[x]${reset} %s) %s\n" "$task_id" "$title"
+    elif task_has_corrupt_json "$task_id"; then
+      printf "  ${red}[!]${reset} %s) %s\n" "$task_id" "$title"
+      pending_ids+=("$task_id")
+      has_corrupt=1
+    else
+      printf "  [ ] %s) %s\n" "$task_id" "$title"
+      pending_ids+=("$task_id")
     fi
   done
   echo
 
-  if [[ "${#missing_ids[@]}" -eq 0 ]]; then
-    echo "All standard audit tasks have already completed for this run."
+  if [[ "$has_corrupt" -eq 1 ]]; then
+    printf "${red}[!] Corrupt or incomplete JSON detected — those tasks should be re-run.${reset}\n"
     echo
-    read -r -p "Press Enter to continue..." _
-  else
-    local skip_input skip_ids=()
-    read -r -p "Tasks to skip (space/comma separated numbers), Enter to run all, 0 to go back: " skip_input
-    if [[ "$skip_input" == "0" ]]; then
-      RUN_OUTPUT_DIR="$previous_output_dir"
-      RUN_REPORT_FILE="$previous_report_file"
-      RUN_DEBUG_LOG="$previous_debug_log"
-      RUN_MANIFEST_FILE="$previous_manifest_file"
-      RUN_LOCATION="$previous_location"
-      RUN_CLIENT_NAME="$previous_client"
-      RUN_NOTE="$previous_note"
-      RUN_LOCATION_SLUG="$previous_location_slug"
-      RUN_CLIENT_SLUG="$previous_client_slug"
-      RUN_NOTE_SLUG="$previous_note_slug"
-      RUN_DATE_STAMP="$previous_date_stamp"
-      SELECTED_INTERFACE="$previous_selected_interface"
-      SESSION_DEBUG_LOG="$previous_session_debug"
-      return 0
-    fi
-    if [[ -n "$skip_input" ]]; then
-      IFS=', ' read -r -a skip_ids <<< "$skip_input"
-    fi
-
-    local run_ids=()
-    for task_id in "${missing_ids[@]}"; do
-      local skip=0
-      for s in ${skip_ids[@]+"${skip_ids[@]}"}; do
-        [[ "$s" == "$task_id" ]] && skip=1
-      done
-      [[ "$skip" -eq 0 ]] && run_ids+=("$task_id")
-    done
-
-    if [[ "${#run_ids[@]}" -eq 0 ]]; then
-      echo "All missing tasks skipped. Nothing to run."
-      echo
-      read -r -p "Press Enter to continue..." _
-    else
-      local needs_stress_confirm=0
-      for task_id in "${run_ids[@]}"; do
-        [[ "$task_id" == "10" ]] && needs_stress_confirm=1
-      done
-      if [[ "$needs_stress_confirm" -eq 1 ]]; then
-        if ! confirm_gateway_stress_operation "Continue Run"; then
-          RUN_OUTPUT_DIR="$previous_output_dir"
-          RUN_REPORT_FILE="$previous_report_file"
-          RUN_DEBUG_LOG="$previous_debug_log"
-          RUN_MANIFEST_FILE="$previous_manifest_file"
-          RUN_LOCATION="$previous_location"
-          RUN_CLIENT_NAME="$previous_client"
-          RUN_NOTE="$previous_note"
-          RUN_LOCATION_SLUG="$previous_location_slug"
-          RUN_CLIENT_SLUG="$previous_client_slug"
-          RUN_NOTE_SLUG="$previous_note_slug"
-          RUN_DATE_STAMP="$previous_date_stamp"
-          SELECTED_INTERFACE="$previous_selected_interface"
-          SESSION_DEBUG_LOG="$previous_session_debug"
-          return 0
-        fi
-      fi
-
-      echo
-      echo "Running ${#run_ids[@]} task(s)..."
-      echo
-      for task_id in "${run_ids[@]}"; do
-        title="$(task_title "$task_id")"
-        if ! run_task_with_progress_output "$task_id" "$title"; then
-          echo "Task $task_id ($title) failed — continuing with remaining tasks."
-        fi
-      done
-      write_manifest_for_current_run || true
-      echo
-      echo "Done. Use 'Build A Report' to generate an updated report for this run."
-      echo
-    fi
-    read -r -p "Press Enter to continue..." _
   fi
 
-  RUN_OUTPUT_DIR="$previous_output_dir"
-  RUN_REPORT_FILE="$previous_report_file"
-  RUN_DEBUG_LOG="$previous_debug_log"
-  RUN_MANIFEST_FILE="$previous_manifest_file"
-  RUN_LOCATION="$previous_location"
-  RUN_CLIENT_NAME="$previous_client"
-  RUN_NOTE="$previous_note"
-  RUN_LOCATION_SLUG="$previous_location_slug"
-  RUN_CLIENT_SLUG="$previous_client_slug"
-  RUN_NOTE_SLUG="$previous_note_slug"
-  RUN_DATE_STAMP="$previous_date_stamp"
-  SELECTED_INTERFACE="$previous_selected_interface"
-  SESSION_DEBUG_LOG="$previous_session_debug"
+  if [[ "${#pending_ids[@]}" -eq 0 ]]; then
+    echo "All tasks have completed for this run."
+    echo
+    read -r -p "Press Enter to continue..." _
+    _restore_continue_state
+    return 0
+  fi
+
+  local skip_input skip_ids=()
+  read -r -p "Tasks to skip (space/comma separated numbers), Enter to run all, 0 to go back: " skip_input
+  if [[ "$skip_input" == "0" ]]; then
+    _restore_continue_state
+    return 0
+  fi
+  if [[ -n "$skip_input" ]]; then
+    IFS=', ' read -r -a skip_ids <<< "$skip_input"
+  fi
+
+  local run_ids=()
+  for task_id in "${pending_ids[@]}"; do
+    local skip=0
+    for s in ${skip_ids[@]+"${skip_ids[@]}"}; do
+      [[ "$s" == "$task_id" ]] && skip=1
+    done
+    [[ "$skip" -eq 0 ]] && run_ids+=("$task_id")
+  done
+
+  if [[ "${#run_ids[@]}" -eq 0 ]]; then
+    echo "All pending tasks skipped. Nothing to run."
+    echo
+    read -r -p "Press Enter to continue..." _
+    _restore_continue_state
+    return 0
+  fi
+
+  local needs_stress_confirm=0
+  for task_id in "${run_ids[@]}"; do
+    [[ "$task_id" == "10" ]] && needs_stress_confirm=1
+  done
+  if [[ "$needs_stress_confirm" -eq 1 ]]; then
+    if ! confirm_gateway_stress_operation "Continue Run"; then
+      _restore_continue_state
+      return 0
+    fi
+  fi
+
+  echo
+  echo "Running ${#run_ids[@]} task(s)..."
+  echo
+  for task_id in "${run_ids[@]}"; do
+    title="$(task_title "$task_id")"
+    if ! run_task_with_progress_output "$task_id" "$title"; then
+      echo "Task $task_id ($title) failed — continuing with remaining tasks."
+    fi
+  done
+  write_manifest_for_current_run || true
+  echo
+  echo "Done."
+
+  # Fix 4: offer to build report immediately
+  echo
+  local build_now
+  read -r -p "Build report now? [y/N]: " build_now
+  if [[ "$build_now" =~ ^[Yy]$ ]]; then
+    local export_dir report_name
+    export_dir="$(default_report_export_dir)"
+    mkdir -p "$export_dir" 2>/dev/null || true
+    report_name="lss-network-tools-report-$(basename "$run_dir")-$(date '+%H-%M').txt"
+    RUN_REPORT_FILE="$export_dir/$report_name"
+    prompt_prepared_by
+    if build_report_for_current_run; then
+      echo "TXT report: $RUN_REPORT_FILE"
+      generate_pdf_report || true
+    fi
+  fi
+
+  echo
+  read -r -p "Press Enter to continue..." _
+  _restore_continue_state
 }
 
 run_action_submenu() {
@@ -2424,20 +2504,26 @@ handle_err_exit() {
   if [[ -z "$SELECTED_INTERFACE" ]] || [[ -z "$RUN_OUTPUT_DIR" ]]; then
     return
   fi
-  # Check whether the interface has disappeared (e.g. USB dongle unplugged)
+  # Check whether the interface has disappeared OR lost its IP address
+  # (covers both physical unplug and WiFi/network drop where interface stays up)
+  local iface_up=true
   if ! ifconfig "$SELECTED_INTERFACE" &>/dev/null 2>&1; then
+    iface_up=false
+  elif ! ifconfig "$SELECTED_INTERFACE" 2>/dev/null | grep -q 'inet '; then
+    iface_up=false
+  fi
+  if [[ "$iface_up" == "false" ]]; then
     NETWORK_INTERRUPTED=true
     stop_spinner_line 2>/dev/null || true
     echo ""
     echo "────────────────────────────────────────────────────────"
-    echo "  Network interface disconnected during the audit."
+    echo "  Network connection lost during the audit."
     echo ""
-    echo "  It looks like '$SELECTED_INTERFACE' was unplugged or"
-    echo "  lost its connection mid-scan. This is a known situation"
-    echo "  — the audit cannot continue without a live interface."
+    echo "  '$SELECTED_INTERFACE' lost its connection mid-scan."
+    echo "  Tasks completed so far have been saved."
     echo ""
-    echo "  No report has been saved. Please reconnect your"
-    echo "  adapter and start a new run."
+    echo "  Please reconnect, then use 'Manage Previous Runs' →"
+    echo "  'Continue This Run' to resume from where it stopped."
     echo "────────────────────────────────────────────────────────"
   fi
 }
