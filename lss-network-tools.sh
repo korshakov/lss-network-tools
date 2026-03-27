@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.41"
+APP_VERSION="v1.2.42"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -1831,6 +1831,12 @@ append_findings_summary() {
 
   file="$(task_output_path 3 2>/dev/null || true)"
   if json_file_usable "$file"; then
+    local gw3_status gw3_ip
+    gw3_status="$(jq -r '.status // "success"' "$file" 2>/dev/null)"
+    if [[ "$gw3_status" == "skipped" ]]; then
+      gw3_ip="$(jq -r '.gateway_ip // "unknown"' "$file" 2>/dev/null)"
+      findings_json="$(append_finding_record "$findings_json" "warning" "No local firewall detected — LAN directly exposed to carrier infrastructure" "The default gateway IP ($gw3_ip) is publicly routable, indicating this network is connected directly to enterprise or carrier infrastructure (such as a Juniper or Cisco core router) without a dedicated local firewall or NAT boundary. Gateway port scanning and stress testing were skipped. Users on this LAN share address space and trust level with upstream provider infrastructure, and have no local traffic filtering or segmentation." "gateway-scan.json")"
+    fi
     open_port_count="$(jq -r '(.open_ports // []) | length' "$file" 2>/dev/null)"
     if [[ "$open_port_count" =~ ^[0-9]+$ ]] && (( open_port_count >= 3 )); then
       gateway="$(jq -r '.gateway_ip // "unknown"' "$file" 2>/dev/null)"
@@ -2048,6 +2054,10 @@ append_remediation_hints() {
 
   if ! json_file_usable "$findings_file"; then
     return 0
+  fi
+
+  if jq -e '.findings[]? | select(.source == "gateway-scan.json" and (.title | test("No local firewall detected"; "i")))' "$findings_file" >/dev/null 2>&1; then
+    remediation_json="$(append_finding_record "$remediation_json" "advice" "Install a dedicated local firewall" "A dedicated local firewall should be installed between the ISP uplink and the LAN. Devices such as a Juniper or Cisco core router are designed for carrier or enterprise backbone routing — not for local LAN protection. Without a local firewall the site has no NAT boundary, no application-layer filtering, no intrusion detection, and no segmentation between LAN users and upstream provider infrastructure. Recommended options include Fortinet FortiGate, Sophos XGS, Cisco Meraki MX, pfSense, or an equivalent. The firewall should provide: NAT (private RFC 1918 LAN addressing), stateful inspection, DNS and DHCP services for the LAN, and a clear management boundary between the ISP handoff and the internal network." "gateway-scan.json")"
   fi
 
   if jq -e '.findings[]? | select(.source == "gateway-scan.json" and (.title | test("Gateway exposes"; "i")))' "$findings_file" >/dev/null 2>&1; then
@@ -4732,8 +4742,26 @@ gateway_details() {
   echo
   echo "Gateway IP: $gateway_ip"
   if ! is_rfc1918_ip "$gateway_ip"; then
-    echo "Warning: Gateway IP $gateway_ip is publicly routable — this device is likely enterprise or carrier infrastructure not designed to serve a local LAN directly. The port scan may be filtered or time out."
-    warnings+=("Gateway IP $gateway_ip is publicly routable. This suggests the device is enterprise or carrier infrastructure (e.g. a core router or firewall) sitting directly on the LAN without a NAT boundary. Port scanning such devices is likely to be filtered or rate-limited, and results may be incomplete.")
+    echo "Warning: Gateway IP $gateway_ip is publicly routable."
+    echo "This indicates the LAN is directly connected to enterprise or carrier infrastructure"
+    echo "(e.g. a Juniper or Cisco core router) without a local firewall or NAT boundary."
+    echo "Gateway port scan and stress test have been skipped — these devices actively filter"
+    echo "probe traffic and a full scan would time out without useful results."
+    jq -n \
+      --arg gateway_ip "$gateway_ip" \
+      '{
+        status: "skipped",
+        success: false,
+        skip_reason: "gateway_public_ip",
+        skip_message: ("Gateway IP " + $gateway_ip + " is publicly routable. The LAN appears to be directly connected to enterprise or carrier infrastructure (e.g. a Juniper or Cisco core router) without a local firewall or NAT boundary. Port scanning and stress testing have been skipped — these devices protect their control plane and actively filter probe traffic, making scan results unreliable."),
+        error: null,
+        warnings: [],
+        gateway_ip: $gateway_ip,
+        open_ports: [],
+        scan_scope: "All TCP ports (1-65535)"
+      }' > "$(task_output_path 3)"
+    validate_json_file "$(task_output_path 3)"
+    return 0
   fi
   echo
   echo "Stage 2: Scanning gateway ports (this may take up to 1 minute)..."
@@ -6923,6 +6951,28 @@ gateway_stress_test() {
 
   [[ -z "$iface" || "$iface" == "null" ]] && iface="$SELECTED_INTERFACE"
 
+  if ! is_rfc1918_ip "$gateway"; then
+    echo "Gateway IP $gateway is publicly routable — stress test skipped."
+    echo "See Gateway Details (Task 3) for details."
+    jq -n \
+      --arg gateway "$gateway" \
+      --arg interface "$iface" \
+      '{
+        status: "skipped",
+        success: false,
+        skip_reason: "gateway_public_ip",
+        skip_message: ("Gateway IP " + $gateway + " is publicly routable. Stress testing has been skipped — the device is enterprise or carrier infrastructure not designed to serve a local LAN, and the test would produce no meaningful results."),
+        error: null,
+        warnings: [],
+        function: "gateway_stress_test",
+        gateway: $gateway,
+        hostname: "unknown",
+        interface: $interface
+      }' > "$(task_output_path 10)"
+    validate_json_file "$(task_output_path 10)"
+    return 0
+  fi
+
   run_stress_test_for_target \
     "$gateway" \
     "$iface" \
@@ -7704,6 +7754,17 @@ render_gateway_report() {
   gateway="$(jq -r '.gateway_ip // "unknown"' "$file" 2>/dev/null)"
   ports="$(jq -r '(.open_ports // []) | map(tostring) | join(", ")' "$file" 2>/dev/null)"
 
+  if [[ "$status" == "skipped" ]]; then
+    local skip_message
+    skip_message="$(jq -r '.skip_message // "Scan was skipped."' "$file" 2>/dev/null)"
+    {
+      echo "Status: skipped"
+      echo "Gateway IP: ${gateway:-unknown}"
+      echo "Reason: $skip_message"
+    } >> "$report_file"
+    return 0
+  fi
+
   {
     echo "Status: ${status:-unknown}"
     if [[ -n "$error_code" ]]; then
@@ -7738,6 +7799,17 @@ render_gateway_stress_report() {
   warning_count="$(jq -r '(.warnings // []) | length' "$file" 2>/dev/null)"
   gateway="$(jq -r '.gateway // "unknown"' "$file" 2>/dev/null)"
   iface="$(jq -r '.interface // "unknown"' "$file" 2>/dev/null)"
+
+  if [[ "$status" == "skipped" ]]; then
+    local skip_message
+    skip_message="$(jq -r '.skip_message // "Stress test was skipped."' "$file" 2>/dev/null)"
+    {
+      echo "Status: skipped"
+      echo "Gateway IP: ${gateway:-unknown}"
+      echo "Reason: $skip_message"
+    } >> "$report_file"
+    return 0
+  fi
   completed_with_warnings="$(jq -r '.completed_with_warnings // false' "$file" 2>/dev/null)"
   warning="$(jq -r '.warning // empty' "$file" 2>/dev/null)"
   stage_status="$(jq -r '.stage_status // {} | to_entries | map("\(.key)=\(.value)") | join(", ")' "$file" 2>/dev/null)"
