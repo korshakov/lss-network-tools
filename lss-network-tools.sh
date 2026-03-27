@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.43"
+APP_VERSION="v1.2.44"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -1669,53 +1669,80 @@ continue_run_from_dir() {
   SESSION_DEBUG_LOG="$RUN_DEBUG_LOG"
   load_run_metadata_from_dir "$run_dir"
 
+  local green='\033[0;32m'
+  local reset='\033[0m'
+
   for task_id in $(get_audit_task_ids); do
     if [[ -z "$(task_json_files "$task_id")" ]]; then
       missing_ids+=("$task_id")
     fi
   done
 
+  echo
+  echo "Audit Task Status:"
+  echo
+  for task_id in $(get_audit_task_ids); do
+    title="$(task_title "$task_id")"
+    if [[ -z "$(task_json_files "$task_id")" ]]; then
+      printf "  [ ] %s) %s\n" "$task_id" "$title"
+    else
+      printf "  ${green}[x]${reset} %s) %s\n" "$task_id" "$title"
+    fi
+  done
+  echo
+
   if [[ "${#missing_ids[@]}" -eq 0 ]]; then
-    echo
     echo "All standard audit tasks have already completed for this run."
     echo
     read -r -p "Press Enter to continue..." _
   else
-    echo
-    echo "Tasks not yet completed for this run:"
-    echo
-    for task_id in "${missing_ids[@]}"; do
-      title="$(task_title "$task_id")"
-      printf "  [ ] %s) %s\n" "$task_id" "$title"
-    done
-    echo
-
-    local needs_stress_confirm=0
-    for task_id in "${missing_ids[@]}"; do
-      [[ "$task_id" == "10" ]] && needs_stress_confirm=1
-    done
-    if [[ "$needs_stress_confirm" -eq 1 ]]; then
-      if ! confirm_gateway_stress_operation "Continue Run"; then
-        RUN_OUTPUT_DIR="$previous_output_dir"
-        RUN_REPORT_FILE="$previous_report_file"
-        RUN_DEBUG_LOG="$previous_debug_log"
-        RUN_MANIFEST_FILE="$previous_manifest_file"
-        RUN_LOCATION="$previous_location"
-        RUN_CLIENT_NAME="$previous_client"
-        RUN_NOTE="$previous_note"
-        RUN_LOCATION_SLUG="$previous_location_slug"
-        RUN_CLIENT_SLUG="$previous_client_slug"
-        RUN_NOTE_SLUG="$previous_note_slug"
-        RUN_DATE_STAMP="$previous_date_stamp"
-        SELECTED_INTERFACE="$previous_selected_interface"
-        SESSION_DEBUG_LOG="$previous_session_debug"
-        return 0
-      fi
+    local skip_input skip_ids=()
+    read -r -p "Tasks to skip (space or comma separated numbers), or press Enter to run all: " skip_input
+    if [[ -n "$skip_input" ]]; then
+      IFS=', ' read -r -a skip_ids <<< "$skip_input"
     fi
 
-    read -r -p "Run these tasks now? [y/N]: " confirm
-    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-      for task_id in "${missing_ids[@]}"; do
+    local run_ids=()
+    for task_id in "${missing_ids[@]}"; do
+      local skip=0
+      for s in ${skip_ids[@]+"${skip_ids[@]}"}; do
+        [[ "$s" == "$task_id" ]] && skip=1
+      done
+      [[ "$skip" -eq 0 ]] && run_ids+=("$task_id")
+    done
+
+    if [[ "${#run_ids[@]}" -eq 0 ]]; then
+      echo "All missing tasks skipped. Nothing to run."
+      echo
+      read -r -p "Press Enter to continue..." _
+    else
+      local needs_stress_confirm=0
+      for task_id in "${run_ids[@]}"; do
+        [[ "$task_id" == "10" ]] && needs_stress_confirm=1
+      done
+      if [[ "$needs_stress_confirm" -eq 1 ]]; then
+        if ! confirm_gateway_stress_operation "Continue Run"; then
+          RUN_OUTPUT_DIR="$previous_output_dir"
+          RUN_REPORT_FILE="$previous_report_file"
+          RUN_DEBUG_LOG="$previous_debug_log"
+          RUN_MANIFEST_FILE="$previous_manifest_file"
+          RUN_LOCATION="$previous_location"
+          RUN_CLIENT_NAME="$previous_client"
+          RUN_NOTE="$previous_note"
+          RUN_LOCATION_SLUG="$previous_location_slug"
+          RUN_CLIENT_SLUG="$previous_client_slug"
+          RUN_NOTE_SLUG="$previous_note_slug"
+          RUN_DATE_STAMP="$previous_date_stamp"
+          SELECTED_INTERFACE="$previous_selected_interface"
+          SESSION_DEBUG_LOG="$previous_session_debug"
+          return 0
+        fi
+      fi
+
+      echo
+      echo "Running ${#run_ids[@]} task(s)..."
+      echo
+      for task_id in "${run_ids[@]}"; do
         title="$(task_title "$task_id")"
         if ! run_task_with_progress_output "$task_id" "$title"; then
           echo "Task $task_id ($title) failed — continuing with remaining tasks."
@@ -1725,8 +1752,6 @@ continue_run_from_dir() {
       echo
       echo "Done. Use 'Build A Report' to generate an updated report for this run."
       echo
-    else
-      echo "Cancelled."
     fi
     read -r -p "Press Enter to continue..." _
   fi
