@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.50"
+APP_VERSION="v1.2.51"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -2618,6 +2618,18 @@ handle_err_exit() {
     echo "  'Continue This Run' to resume from where it stopped."
     echo "────────────────────────────────────────────────────────"
   fi
+}
+
+interface_has_valid_ip() {
+  local iface="$1"
+  local ip
+  if ! ifconfig "$iface" &>/dev/null 2>&1; then
+    return 1
+  fi
+  ip="$(ifconfig "$iface" 2>/dev/null | awk '/inet /{print $2}' | head -1)"
+  [[ -z "$ip" ]] && return 1
+  [[ "$ip" == 169.254.* ]] && return 1
+  return 0
 }
 
 warn_if_not_root() {
@@ -6854,8 +6866,10 @@ run_stress_test_for_target() {
   if task_supports_multiple_entries "$task_id"; then
     entry_index="$(next_multi_entry_index "$task_id")"
     raw_prefix="$(multi_entry_raw_prefix_for_index "$task_id" "$entry_index")"
+    json_file="$(multi_entry_output_path_for_index "$task_id" "$entry_index")"
   else
     raw_prefix="$(task_raw_prefix "$task_id")"
+    json_file="$(task_output_path "$task_id")"
   fi
 
   baseline_file="$(mktemp)"
@@ -6866,11 +6880,6 @@ run_stress_test_for_target() {
   recovery_file="$(mktemp)"
   if [[ -z "$baseline_file" || -z "$jitter_file" || -z "$large_file" || -z "$sustained_file" || -z "$recovery_file" ]]; then
     echo "Error: Unable to create temporary files for the stress test."
-    if task_supports_multiple_entries "$task_id"; then
-      json_file="$(multi_entry_output_path_for_index "$task_id" "$(next_multi_entry_index "$task_id")")"
-    else
-      json_file="$(task_output_path "$task_id")"
-    fi
     jq -n \
       --arg status "failed" \
       --argjson success false \
@@ -6894,11 +6903,35 @@ run_stress_test_for_target() {
     echo "Warning: baseline latency test failed. Continuing with remaining stages."
   fi
 
+  if ! interface_has_valid_ip "$iface"; then
+    echo ""
+    echo "Interface $iface lost its IP address after the baseline test — stress test aborted."
+    jq -n --arg ec "interface_disconnected" \
+      --arg em "Interface $iface lost its IP address after the baseline test. The stress test was aborted to avoid running further stages on a disconnected interface." \
+      --arg fn "$json_function_name" --arg tk "$report_target_key" --arg tip "$target_ip" --arg hn "$hostname" --arg if_ "$iface" \
+      '{status:"failed",success:false,error:{code:$ec,message:$em},warnings:[],function:$fn,($tk):$tip,hostname:$hn,interface:$if_}' > "$json_file"
+    validate_json_file "$json_file" || true
+    rm -f "$baseline_file" "$jitter_file" "$large_file" "$sustained_file" "$recovery_file"
+    return 1
+  fi
+
   echo "Stage 3: Jitter test (200 pings @ 0.05s interval)..."
   if ! run_ping_stage "$jitter_file" ping -i 0.05 -c 200 "$target_ip"; then
     jitter_status="failed"
     stage_failure=true
     echo "Warning: jitter test failed. Continuing with remaining stages."
+  fi
+
+  if ! interface_has_valid_ip "$iface"; then
+    echo ""
+    echo "Interface $iface lost its IP address during the jitter test — stress test aborted."
+    jq -n --arg ec "interface_disconnected" \
+      --arg em "Interface $iface lost its IP address during the jitter test. The stress test was aborted to avoid running further stages on a disconnected interface." \
+      --arg fn "$json_function_name" --arg tk "$report_target_key" --arg tip "$target_ip" --arg hn "$hostname" --arg if_ "$iface" \
+      '{status:"failed",success:false,error:{code:$ec,message:$em},warnings:[],function:$fn,($tk):$tip,hostname:$hn,interface:$if_}' > "$json_file"
+    validate_json_file "$json_file" || true
+    rm -f "$baseline_file" "$jitter_file" "$large_file" "$sustained_file" "$recovery_file"
+    return 1
   fi
 
   echo "Stage 4: Large packet test (100 pings @ 1400 bytes)..."
@@ -6914,6 +6947,18 @@ run_stress_test_for_target() {
     ramping_files+=("$ramp_file")
   done
 
+  if ! interface_has_valid_ip "$iface"; then
+    echo ""
+    echo "Interface $iface lost its IP address during the large packet test — stress test aborted."
+    jq -n --arg ec "interface_disconnected" \
+      --arg em "Interface $iface lost its IP address during the large packet test. The stress test was aborted to avoid running further stages on a disconnected interface." \
+      --arg fn "$json_function_name" --arg tk "$report_target_key" --arg tip "$target_ip" --arg hn "$hostname" --arg if_ "$iface" \
+      '{status:"failed",success:false,error:{code:$ec,message:$em},warnings:[],function:$fn,($tk):$tip,hostname:$hn,interface:$if_}' > "$json_file"
+    validate_json_file "$json_file" || true
+    rm -f "$baseline_file" "$jitter_file" "$large_file" "$sustained_file" "$recovery_file" "${ramping_files[@]:-}"
+    return 1
+  fi
+
   for idx in "${!ramp_sizes[@]}"; do
     if ! run_ping_stage "${ramping_files[$idx]}" ping -s "${ramp_sizes[$idx]}" -c 20 "$target_ip"; then
       ramping_status="partial"
@@ -6922,11 +6967,35 @@ run_stress_test_for_target() {
     fi
   done
 
+  if ! interface_has_valid_ip "$iface"; then
+    echo ""
+    echo "Interface $iface lost its IP address during the ramping test — stress test aborted."
+    jq -n --arg ec "interface_disconnected" \
+      --arg em "Interface $iface lost its IP address during the ramping test. The stress test was aborted to avoid running further stages on a disconnected interface." \
+      --arg fn "$json_function_name" --arg tk "$report_target_key" --arg tip "$target_ip" --arg hn "$hostname" --arg if_ "$iface" \
+      '{status:"failed",success:false,error:{code:$ec,message:$em},warnings:[],function:$fn,($tk):$tip,hostname:$hn,interface:$if_}' > "$json_file"
+    validate_json_file "$json_file" || true
+    rm -f "$baseline_file" "$jitter_file" "$large_file" "$sustained_file" "$recovery_file" "${ramping_files[@]:-}"
+    return 1
+  fi
+
   echo "Stage 6: Sustained load test (300 pings @ 0.02s interval)..."
   if ! run_ping_stage "$sustained_file" ping -i 0.02 -c 300 "$target_ip"; then
     sustained_status="failed"
     stage_failure=true
     echo "Warning: sustained load test failed. Continuing with remaining stages."
+  fi
+
+  if ! interface_has_valid_ip "$iface"; then
+    echo ""
+    echo "Interface $iface lost its IP address during the sustained load test — stress test aborted."
+    jq -n --arg ec "interface_disconnected" \
+      --arg em "Interface $iface lost its IP address during the sustained load test. The stress test was aborted to avoid running further stages on a disconnected interface." \
+      --arg fn "$json_function_name" --arg tk "$report_target_key" --arg tip "$target_ip" --arg hn "$hostname" --arg if_ "$iface" \
+      '{status:"failed",success:false,error:{code:$ec,message:$em},warnings:[],function:$fn,($tk):$tip,hostname:$hn,interface:$if_}' > "$json_file"
+    validate_json_file "$json_file" || true
+    rm -f "$baseline_file" "$jitter_file" "$large_file" "$sustained_file" "$recovery_file" "${ramping_files[@]:-}"
+    return 1
   fi
 
   echo "Stage 7: Recovery test (30 pings)..."
@@ -7016,11 +7085,6 @@ run_stress_test_for_target() {
     warning_json="$(printf '%s' "$stage_warning" | jq -R .)"
   fi
 
-  if task_supports_multiple_entries "$task_id"; then
-    json_file="$(multi_entry_output_path_for_index "$task_id" "$entry_index")"
-  else
-    json_file="$(task_output_path "$task_id")"
-  fi
   json_tmp="$(mktemp)"
   if ! jq -n \
     --arg status "$status" \
