@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.68"
+APP_VERSION="v1.2.69"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -8849,33 +8849,82 @@ unifi_device_scan() {
     return 1
   fi
 
-  # Discover IPs (same approach as glennr's adoption script)
+  # Step 1: nmap finds candidate IPs (any that respond on UDP 10001)
   local candidate_ips=()
   while IFS= read -r ip; do
     [[ -n "$ip" ]] && candidate_ips+=("$ip")
   done < <(nmap -n -sU -p 10001 "$subnet" -oG - 2>/dev/null | awk '/10001\/open/{print $2}')
 
-  # For each candidate: get MAC via ARP, keep only Ubiquiti OUI devices
-  local entries="" mac oui
-  for ip in "${candidate_ips[@]+"${candidate_ips[@]}"}"; do
-    mac=""
-    if [[ "$OS" == "macos" ]]; then
-      mac="$(arp -n "$ip" 2>/dev/null | awk 'NR==1 && $4 ~ /^([0-9a-f]{1,2}:){5}[0-9a-f]{1,2}$/{print $4}')"
-    else
-      mac="$(ip neigh show "$ip" 2>/dev/null | awk '$5 ~ /^([0-9a-f]{1,2}:){5}[0-9a-f]{1,2}$/{print $5; exit}')"
+  # Step 2: send the actual UniFi discovery packet to each candidate, bound to
+  # port 10001 — devices respond BACK to port 10001, not a random ephemeral port.
+  # Only devices that reply with a valid TLV structure are real UniFi devices.
+  local entries=""
+  if [[ "${#candidate_ips[@]}" -gt 0 ]] && command -v python3 &>/dev/null; then
+    local py_out
+    py_out="$(python3 - "${local_ip:-}" "${candidate_ips[@]}" <<'PYEOF'
+import socket, struct, sys, time, json
+
+local_ip = sys.argv[1]
+hosts    = sys.argv[2:]
+packets  = [b'\x01\x00\x00\x00', b'\x02\x0a\x00\x04\x01\x00\x00\x01']
+devices  = {}
+
+def parse_tlv(data, src_ip):
+    if len(data) < 4:
+        return False
+    offset = 4
+    mac = None
+    ip  = None
+    while offset + 3 <= len(data):
+        tlv_type = data[offset]
+        tlv_len  = struct.unpack('>H', data[offset+1:offset+3])[0]
+        if offset + 3 + tlv_len > len(data):
+            break
+        tlv_val = data[offset+3:offset+3+tlv_len]
+        offset += 3 + tlv_len
+        if tlv_type == 0x01 and len(tlv_val) == 6:
+            mac = ':'.join('%02x' % b for b in tlv_val)
+        elif tlv_type == 0x02 and len(tlv_val) >= 10:
+            mac = ':'.join('%02x' % b for b in tlv_val[:6])
+            ip  = '.'.join(str(b) for b in tlv_val[6:10])
+    if mac:
+        devices[mac] = {'mac': mac, 'ip': ip or src_ip}
+        return True
+    return False
+
+try:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    sock.settimeout(0.5)
+    # Bind to port 10001 — devices respond back to port 10001
+    sock.bind((local_ip if local_ip else '', 10001))
+    for host in hosts:
+        for pkt in packets:
+            try: sock.sendto(pkt, (host, 10001))
+            except Exception: pass
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        try:
+            data, addr = sock.recvfrom(4096)
+            parse_tlv(data, addr[0])
+        except socket.timeout: continue
+        except Exception: continue
+    sock.close()
+except Exception as e:
+    sys.stderr.write(str(e) + '\n')
+
+print(json.dumps({'devices': list(devices.values())}))
+PYEOF
+)" 2>/dev/null || true
+
+    local py_devices
+    py_devices="$(printf '%s\n' "$py_out" | jq -c '.devices // []' 2>/dev/null || echo "[]")"
+    devices_found="$(printf '%s\n' "$py_devices" | jq 'length' 2>/dev/null || echo 0)"
+    if [[ "$devices_found" -gt 0 ]]; then
+      entries="$(printf '%s\n' "$py_devices" | jq -r '.[] | "{\"mac\":\"" + .mac + "\",\"ip\":\"" + .ip + "\"}"' | paste -sd',' -)"
     fi
-    [[ -z "$mac" ]] && continue
-    oui="$(printf '%s' "$mac" | awk -F: '{printf "%s:%s:%s",$1,$2,$3}' | tr '[:upper:]' '[:lower:]')"
-    case "$oui" in
-      00:15:6d|00:27:22|04:18:d6|0c:80:63|18:e8:29|24:a4:3c|24:5a:4c|\
-      44:d9:e7|4c:bb:58|60:22:32|68:72:51|70:a7:41|74:83:c2|78:8a:20|\
-      80:2a:a8|9c:05:d6|b4:fb:e4|dc:9f:db|e0:63:da|e4:38:83|f4:92:bf|\
-      f4:e2:c6|fc:ec:da)
-        entries="${entries:+$entries,}{\"mac\":\"$mac\",\"ip\":\"$ip\"}"
-        devices_found=$((devices_found + 1))
-        ;;
-    esac
-  done
+  fi
 
   [[ -n "$entries" ]] && device_list="[$entries]"
 
