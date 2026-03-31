@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.52"
+APP_VERSION="v1.2.53"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -1954,6 +1954,116 @@ continue_run_from_dir() {
   _restore_continue_state
 }
 
+view_results_for_run_dir() {
+  local run_dir="$1"
+  local previous_output_dir="${RUN_OUTPUT_DIR:-}"
+  local available_ids=()
+  local available_titles=()
+  local task_id title task_files choice_str
+  local -a choice_arr
+  local tmp_out entry_index file_path description
+
+  RUN_OUTPUT_DIR="$run_dir"
+
+  for task_id in $(get_task_ids); do
+    title="$(task_title "$task_id")"
+    if [[ -n "$(task_json_files "$task_id")" ]]; then
+      available_ids+=("$task_id")
+      available_titles+=("$title")
+    fi
+  done
+
+  if [[ "${#available_ids[@]}" -eq 0 ]]; then
+    echo
+    echo "No task results available for this run."
+    echo
+    read -r -p "Press Enter to continue..." _
+    RUN_OUTPUT_DIR="$previous_output_dir"
+    return
+  fi
+
+  while true; do
+    echo
+    echo "Available Results:"
+    echo "=================="
+    local idx=1
+    for title in "${available_titles[@]}"; do
+      echo "$idx) $title"
+      idx=$((idx + 1))
+    done
+    echo
+    read -r -p "Enter task numbers to view (e.g. 1,3) or 0 to go back: " choice_str
+
+    [[ "$choice_str" == "0" ]] && break
+
+    IFS=',' read -ra choice_arr <<< "$choice_str"
+
+    local selected_ids=()
+    local valid=true
+    for c in "${choice_arr[@]}"; do
+      c="${c// /}"
+      if [[ "$c" =~ ^[0-9]+$ ]] && (( c >= 1 && c <= ${#available_ids[@]} )); then
+        selected_ids+=("${available_ids[$((c - 1))]}")
+      else
+        echo "Invalid selection: $c"
+        valid=false
+        break
+      fi
+    done
+    [[ "$valid" == "false" ]] && continue
+    [[ "${#selected_ids[@]}" -eq 0 ]] && continue
+
+    tmp_out="$(mktemp)"
+    for task_id in "${selected_ids[@]}"; do
+      title="$(task_title "$task_id")"
+      description="$(task_description "$task_id")"
+      entry_index=0
+      while IFS= read -r file_path; do
+        [[ -z "$file_path" ]] && continue
+        entry_index=$((entry_index + 1))
+        {
+          echo "================================================"
+          if task_supports_multiple_entries "$task_id"; then
+            echo "$task_id: $title - Device $entry_index"
+          else
+            echo "$task_id: $title"
+          fi
+          echo "Description: $description"
+          echo "================================================"
+        } >> "$tmp_out"
+        case "$task_id" in
+          1)  render_interface_info_report "$file_path" "$tmp_out" ;;
+          2)  render_speed_test_report "$file_path" "$tmp_out" ;;
+          3)  render_gateway_report "$file_path" "$tmp_out" ;;
+          4)  render_dhcp_report "$file_path" "$tmp_out" ;;
+          5)  render_dhcp_response_time_report "$file_path" "$tmp_out" ;;
+          6)  render_generic_network_scan_report "$file_path" "$tmp_out" "DNS" ;;
+          7)  render_generic_network_scan_report "$file_path" "$tmp_out" "LDAP/AD" ;;
+          8)  render_generic_network_scan_report "$file_path" "$tmp_out" "SMB/NFS" ;;
+          9)  render_generic_network_scan_report "$file_path" "$tmp_out" "Printer" ;;
+          10) render_gateway_stress_report "$file_path" "$tmp_out" ;;
+          11) render_vlan_trunk_report "$file_path" "$tmp_out" ;;
+          12) render_duplicate_ip_report "$file_path" "$tmp_out" ;;
+          13) render_custom_target_port_scan_report "$file_path" "$tmp_out" ;;
+          14) render_custom_target_stress_report "$file_path" "$tmp_out" ;;
+          15) render_custom_target_identity_report "$file_path" "$tmp_out" ;;
+          16) render_custom_target_dns_assessment_report "$file_path" "$tmp_out" ;;
+          17) render_wireless_site_survey_report "$file_path" "$tmp_out" ;;
+        esac
+        echo >> "$tmp_out"
+      done < <(task_json_files "$task_id")
+    done
+
+    echo
+    cat "$tmp_out"
+    rm -f "$tmp_out"
+    echo
+    read -r -p "Press Enter to continue..." _
+  done
+
+  RUN_OUTPUT_DIR="$previous_output_dir"
+}
+
 run_action_submenu() {
   local run_dir="$1"
   local label=""
@@ -1991,18 +2101,7 @@ run_action_submenu() {
         fi
         ;;
       3)
-        txt_file="$(find "$run_dir" -maxdepth 1 -type f -name '*.txt' ! -name 'debug.txt' | sort | tail -n 1)"
-        if [[ -z "$txt_file" ]]; then
-          echo
-          echo "No report file found for this run."
-          echo
-          read -r -p "Press Enter to continue..." _
-        else
-          echo
-          cat "$txt_file"
-          echo
-          read -r -p "Press Enter to continue..." _
-        fi
+        view_results_for_run_dir "$run_dir" || true
         ;;
       4)
         continue_run_from_dir "$run_dir" || true
