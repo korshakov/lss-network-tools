@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.65"
+APP_VERSION="v1.2.66"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -8849,8 +8849,11 @@ unifi_device_scan() {
     return 1
   fi
 
+  # Send the actual UniFi discovery payload (0x01000000) so devices respond
+  # and show as truly open rather than open|filtered, then run the
+  # ubiquiti-discovery NSE script to parse the TLV response for MAC + IP.
   local nmap_out entries="" mac ip
-  nmap_out="$(nmap -n -sU -p 10001 --script ubiquiti-discovery "$subnet" 2>/dev/null || true)"
+  nmap_out="$(nmap -n -sU -p 10001 --data-hex "01000000" --script ubiquiti-discovery "$subnet" 2>/dev/null || true)"
 
   while IFS='|' read -r mac ip; do
     [[ -z "$mac" || -z "$ip" ]] && continue
