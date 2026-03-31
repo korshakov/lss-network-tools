@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.57"
+APP_VERSION="v1.2.58"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -40,6 +40,7 @@ SELECTED_INTERFACE=""
 SHOW_FUNCTION_HEADER=1
 SPINNER_PID=""
 NETWORK_INTERRUPTED=false
+_GOTO_MAIN_MENU=false
 TASKS_DATA=$(cat <<'TASKS'
 1|Interface Network Info|interface-network-info.json
 2|Internet Speed Test|internet-speed-test.json
@@ -1524,6 +1525,7 @@ build_report_for_run_dir() {
     echo "1) Yes"
     echo "2) No"
     echo "3) Cancel"
+    echo "00) Back to Main Menu"
     echo
     read -r -p "Choose option: " export_choice
 
@@ -1545,7 +1547,8 @@ build_report_for_run_dir() {
         break
         ;;
       3) return 0 ;;
-      *) echo "Invalid selection. Enter 1, 2 or 3." ;;
+      00) _GOTO_MAIN_MENU=true; return 0 ;;
+      *) echo "Invalid selection. Enter 1, 2, 3 or 00." ;;
     esac
   done
 
@@ -1765,6 +1768,7 @@ check_continue_run_network() {
     echo "1) Start a fresh new run on this network"
     echo "2) Continue this run as-is"
     [[ "${#iface_names[@]}" -gt 0 ]] && echo "3) Switch to a different interface"
+    echo "00) Back to Main Menu"
     echo "0) Cancel"
     echo
     local choice
@@ -1788,6 +1792,7 @@ check_continue_run_network() {
           sleep 1
         fi
         ;;
+      00) _GOTO_MAIN_MENU=true; return 1 ;;
       0) return 1 ;;
       *) echo "Invalid selection."; sleep 1 ;;
     esac
@@ -1839,6 +1844,10 @@ continue_run_from_dir() {
   local net_check
   check_continue_run_network "$run_dir"
   net_check=$?
+  if [[ "${_GOTO_MAIN_MENU:-false}" == "true" ]]; then
+    _restore_continue_state
+    return 0
+  fi
   if [[ "$net_check" -ne 0 ]]; then
     _restore_continue_state
     return 0
@@ -1996,8 +2005,9 @@ view_results_for_run_dir() {
       idx=$((idx + 1))
     done
     echo
-    read -r -p "Enter task numbers to view (e.g. 1,3) or 0 to go back: " choice_str
+    read -r -p "Enter task numbers to view (e.g. 1,3), 0 to go back, 00 for main menu: " choice_str
 
+    [[ "$choice_str" == "00" ]] && { _GOTO_MAIN_MENU=true; return; }
     [[ "$choice_str" == "0" ]] && return
     [[ -z "${choice_str// /}" ]] && continue
 
@@ -2087,13 +2097,16 @@ run_action_submenu() {
     echo "2) Delete This Run"
     echo "3) View Results"
     echo "4) Continue This Run"
+    echo "00) Back to Main Menu"
     echo "0) Back"
     echo
     read -r -p "Choose option: " choice
     case "$choice" in
       0) return 0 ;;
+      00) _GOTO_MAIN_MENU=true; return 0 ;;
       1)
         build_report_for_run_dir "$run_dir" || true
+        [[ "${_GOTO_MAIN_MENU:-false}" == "true" ]] && return 0
         ;;
       2)
         echo
@@ -2108,9 +2121,11 @@ run_action_submenu() {
         ;;
       3)
         view_results_for_run_dir "$run_dir" || true
+        [[ "${_GOTO_MAIN_MENU:-false}" == "true" ]] && return 0
         ;;
       4)
         continue_run_from_dir "$run_dir" || true
+        [[ "${_GOTO_MAIN_MENU:-false}" == "true" ]] && return 0
         ;;
       *) echo "Invalid selection. Try again."; sleep 1 ;;
     esac
@@ -2161,6 +2176,7 @@ manage_previous_runs() {
         if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#run_dirs[@]} )); then
           run_dir="${run_dirs[$((choice - 1))]}"
           run_action_submenu "$run_dir" || true
+          [[ "${_GOTO_MAIN_MENU:-false}" == "true" ]] && return 0
         else
           echo "Invalid selection. Try again."
           sleep 1
@@ -2176,6 +2192,7 @@ startup_menu() {
   local green='\033[0;32m'
   local reset='\033[0m'
   while true; do
+    _GOTO_MAIN_MENU=false
     clear_screen_if_supported
     printf "${yellow}LSS Network Tools${reset}\n"
     printf "${yellow}=================${reset}\n"
@@ -6729,11 +6746,16 @@ wireless_site_survey() {
     for i in "${!wifi_ifaces[@]}"; do
       printf "  %s) %s\n" "$((i + 1))" "${wifi_ifaces[$i]}"
     done
+    echo "  00) Back to Main Menu"
     echo "  0) Cancel"
     echo
 
     while true; do
       read -r -p "Select wireless interface: " sel
+      if [[ "$sel" == "00" ]]; then
+        _GOTO_MAIN_MENU=true
+        return 0
+      fi
       if [[ "$sel" == "0" ]]; then
         return 0
       fi
@@ -6822,6 +6844,7 @@ wireless_site_survey() {
     echo "2) Move to another floor (same building)"
     echo "3) Move to another building"
     echo "4) Finished"
+    echo "00) Back to Main Menu"
     echo
 
     while true; do
@@ -6845,12 +6868,18 @@ wireless_site_survey() {
         4)
           break 2
           ;;
+        00)
+          _GOTO_MAIN_MENU=true
+          break 2
+          ;;
         *)
-          echo "Please enter 1, 2, 3 or 4."
+          echo "Please enter 1, 2, 3, 4 or 00."
           ;;
       esac
     done
   done
+
+  [[ "${_GOTO_MAIN_MENU:-false}" == "true" ]] && return 0
 
   json_file="$(task_output_path 17)"
   jq -n \
@@ -9022,6 +9051,7 @@ main_menu() {
         echo
         echo "=============================="
         echo
+        [[ "${_GOTO_MAIN_MENU:-false}" == "true" ]] && return 0
         ;;
       0) return 0 ;;
       *)
@@ -9031,6 +9061,7 @@ main_menu() {
             title="Function $choice"
           fi
           run_task_with_results_output "$choice" "$title"
+          [[ "${_GOTO_MAIN_MENU:-false}" == "true" ]] && return 0
         else
           echo "Invalid selection. Try again."
         fi
