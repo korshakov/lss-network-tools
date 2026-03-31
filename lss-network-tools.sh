@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.51"
+APP_VERSION="v1.2.52"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -24,7 +24,6 @@ RUN_PREPARED_BY=""
 RUN_NOTE=""
 RUN_NOTE_SLUG=""
 HIGH_IMPACT_STRESS_CONFIRMED=0
-_REPORT_BUILT=0
 SESSION_DEBUG_LOG=""
 RUN_DEBUG_LOG=""
 RUN_MANIFEST_FILE=""
@@ -1452,18 +1451,6 @@ build_report_for_current_run() {
   append_remediation_hints "$report_file"
 
   echo "Report built successfully: $report_file"
-}
-
-list_reportable_run_dirs() {
-  local dir
-
-  find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -type d | while IFS= read -r dir; do
-    if find "$dir" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null | grep -q .; then
-      echo "$dir"
-    fi
-  done | while IFS= read -r dir; do
-    printf '%s\t%s\n' "$(stat -f '%m' "$dir" 2>/dev/null || stat -c '%Y' "$dir" 2>/dev/null || echo 0)" "$dir"
-  done | sort -rn | awk -F'\t' '{print $2}'
 }
 
 default_report_export_dir() {
@@ -2976,10 +2963,15 @@ select_interface() {
     if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#ordered_interfaces[@]} )); then
       SELECTED_INTERFACE="${ordered_interfaces[$((choice - 1))]}"
       clear_screen_if_supported
-      if ! interface_has_ipv4 "$SELECTED_INTERFACE"; then
-        echo "Warning: $SELECTED_INTERFACE does not currently have an IPv4 address."
-        echo "Interface info and network-range scans may fail on bridge/physical-only interfaces."
-        echo "On Proxmox or Debian bridge hosts, you may want a bridge interface such as vmbr0 instead."
+      if ! interface_has_valid_ip "$SELECTED_INTERFACE"; then
+        if interface_has_ipv4 "$SELECTED_INTERFACE"; then
+          echo "Warning: $SELECTED_INTERFACE has a self-assigned address (169.254.x.x) — no DHCP lease."
+          echo "The interface is up but has no routable IP. Check your cable or DHCP server."
+        else
+          echo "Warning: $SELECTED_INTERFACE does not currently have an IPv4 address."
+          echo "Interface info and network-range scans may fail on bridge/physical-only interfaces."
+          echo "On Proxmox or Debian bridge hosts, you may want a bridge interface such as vmbr0 instead."
+        fi
         echo
       fi
       return
