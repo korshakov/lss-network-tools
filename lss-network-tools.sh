@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.59"
+APP_VERSION="v1.2.60"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -8818,9 +8818,9 @@ unifi_device_scan() {
 
   local broadcast_addr=""
   if [[ "$OS" == "macos" ]]; then
-    broadcast_addr="$(ifconfig "$iface" 2>/dev/null | awk '/inet /{print $4}' | head -1)"
+    broadcast_addr="$(ifconfig "$iface" 2>/dev/null | awk '/inet .*broadcast/{for(i=1;i<=NF;i++) if($i=="broadcast"){print $(i+1); exit}}')"
   else
-    broadcast_addr="$(ip addr show "$iface" 2>/dev/null | awk '/inet /{print $4}' | head -1)"
+    broadcast_addr="$(ip addr show "$iface" 2>/dev/null | awk '/inet .*brd/{for(i=1;i<=NF;i++) if($i=="brd"){print $(i+1); exit}}')"
   fi
   [[ -z "$broadcast_addr" ]] && broadcast_addr="255.255.255.255"
 
