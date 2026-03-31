@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.73"
+APP_VERSION="v1.2.74"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -501,6 +501,17 @@ about_and_health() {
     else
       printf "${yellow}[WARN]${reset} iw not found — Task 17 wireless scan unavailable (install with: apt install iw)\n"
     fi
+  fi
+
+  echo
+  echo "Task 18 - UniFi Device Scan"
+  echo "---------------------------"
+  local nse_path="$APP_ROOT/unifi-discover.nse"
+  if [[ -f "$nse_path" ]]; then
+    printf "${green}[OK]${reset} unifi-discover.nse\n"
+  else
+    printf "${red}[MISSING]${reset} unifi-discover.nse not found at $nse_path\n"
+    issues=$((issues + 1))
   fi
 
   echo
