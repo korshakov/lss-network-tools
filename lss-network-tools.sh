@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.60"
+APP_VERSION="v1.2.61"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -8816,69 +8816,86 @@ unifi_device_scan() {
     return 1
   fi
 
-  local broadcast_addr=""
+  local broadcast_addr="" local_ip=""
   if [[ "$OS" == "macos" ]]; then
     broadcast_addr="$(ifconfig "$iface" 2>/dev/null | awk '/inet .*broadcast/{for(i=1;i<=NF;i++) if($i=="broadcast"){print $(i+1); exit}}')"
+    local_ip="$(ifconfig "$iface" 2>/dev/null | awk '/inet /{print $2}' | head -1)"
   else
     broadcast_addr="$(ip addr show "$iface" 2>/dev/null | awk '/inet .*brd/{for(i=1;i<=NF;i++) if($i=="brd"){print $(i+1); exit}}')"
+    local_ip="$(ip addr show "$iface" 2>/dev/null | awk '/inet /{sub(/\/.*$/,"",$2); print $2}' | head -1)"
   fi
   [[ -z "$broadcast_addr" ]] && broadcast_addr="255.255.255.255"
+  [[ -z "$local_ip" ]] && local_ip=""
 
   echo "Interface:   $iface"
+  echo "Local IP:    ${local_ip:-unknown}"
   echo "Broadcast:   $broadcast_addr"
   echo "Protocol:    UDP port 10001 (UniFi discovery)"
-  echo "Timeout:     3 seconds"
+  echo "Timeout:     5 seconds"
   echo
   echo "Scanning..."
   echo
 
   local py_out
-  py_out="$(python3 - "$broadcast_addr" <<'PYEOF'
+  py_out="$(python3 - "$broadcast_addr" "$local_ip" <<'PYEOF'
 import socket, struct, sys, time, json
 
 broadcast = sys.argv[1]
-discovery_packet = b'\x01\x00\x00\x00'
+local_ip  = sys.argv[2] if len(sys.argv) > 2 else ''
+
+# v1 and v2 discovery packets
+packets = [
+    b'\x01\x00\x00\x00',
+    b'\x02\x0a\x00\x04\x01\x00\x00\x01',
+]
 devices = {}
 
+def parse_response(data, src_ip):
+    if len(data) < 4:
+        return
+    offset = 4
+    mac = None
+    ip = None
+    while offset + 3 <= len(data):
+        tlv_type = data[offset]
+        tlv_len = struct.unpack('>H', data[offset+1:offset+3])[0]
+        if offset + 3 + tlv_len > len(data):
+            break
+        tlv_val = data[offset+3:offset+3+tlv_len]
+        offset += 3 + tlv_len
+        if tlv_type == 0x01 and len(tlv_val) == 6:
+            mac = ':'.join('%02x' % b for b in tlv_val)
+        elif tlv_type == 0x02 and len(tlv_val) >= 10:
+            mac = ':'.join('%02x' % b for b in tlv_val[:6])
+            ip = '.'.join(str(b) for b in tlv_val[6:10])
+    if mac:
+        if ip is None:
+            ip = src_ip
+        devices[mac] = {'mac': mac, 'ip': ip}
+
 try:
+    bind_addr = local_ip if local_ip else ''
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.settimeout(0.5)
-    sock.bind(('', 0))
-    for dest in set([broadcast, '255.255.255.255']):
-        try:
-            sock.sendto(discovery_packet, (dest, 10001))
-        except Exception:
-            pass
-    deadline = time.time() + 3.0
+    sock.bind((bind_addr, 0))
+    targets = list({broadcast, '255.255.255.255'})
+    for pkt in packets:
+        for dest in targets:
+            try:
+                sock.sendto(pkt, (dest, 10001))
+            except Exception:
+                pass
+    deadline = time.time() + 5.0
     while time.time() < deadline:
         try:
             data, addr = sock.recvfrom(4096)
+            parse_response(data, addr[0])
         except socket.timeout:
             continue
         except Exception:
             continue
-        if len(data) < 4:
-            continue
-        offset = 4
-        mac = None
-        ip = None
-        while offset + 3 <= len(data):
-            tlv_type = data[offset]
-            tlv_len = struct.unpack('>H', data[offset+1:offset+3])[0]
-            if offset + 3 + tlv_len > len(data):
-                break
-            tlv_val = data[offset+3:offset+3+tlv_len]
-            offset += 3 + tlv_len
-            if tlv_type == 0x01 and len(tlv_val) == 6:
-                mac = ':'.join('%02x' % b for b in tlv_val)
-            elif tlv_type == 0x02 and len(tlv_val) >= 10:
-                mac = ':'.join('%02x' % b for b in tlv_val[:6])
-                ip = '.'.join(str(b) for b in tlv_val[6:10])
-        if mac:
-            if ip is None:
-                ip = addr[0]
-            devices[mac] = {'mac': mac, 'ip': ip}
     sock.close()
 except Exception as e:
     print(json.dumps({'error': str(e), 'devices': []}))
