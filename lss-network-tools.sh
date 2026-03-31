@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.56"
+APP_VERSION="v1.2.57"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -1968,7 +1968,7 @@ view_results_for_run_dir() {
 
   RUN_OUTPUT_DIR="$run_dir"
   # Restore RUN_OUTPUT_DIR on any exit from this function, including crashes
-  trap 'RUN_OUTPUT_DIR="$previous_output_dir"' RETURN
+  trap 'RUN_OUTPUT_DIR="$previous_output_dir"; trap - RETURN' RETURN
 
   for task_id in $(get_task_ids); do
     title="$(task_title "$task_id")"
