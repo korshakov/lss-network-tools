@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.83"
+APP_VERSION="v1.2.84"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -8918,7 +8918,8 @@ unifi_device_scan() {
   # Locally administered MACs (bit 1 of first octet set) pass — newer Ubiquiti
   # hardware (UXG Pro etc.) uses them.
   is_ubiquiti_mac() {
-    local mac="${1,,}"  # lowercase
+    local mac
+    mac="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
     local first_octet="${mac:0:2}"
     local oui="${mac:0:8}"
     # Locally administered MAC: second-least-significant bit of first octet set
