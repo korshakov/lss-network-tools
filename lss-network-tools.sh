@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.88"
+APP_VERSION="v1.2.89"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -8898,9 +8898,13 @@ unifi_device_scan() {
   # and disappear between runs. Running 3 times and taking the union gives a
   # consistent result — a device missed in one pass is caught in another.
   # Note: use temp files instead of declare -A so this works on macOS bash 3.2.
-  local tmp_found_ips tmp_tlv_macs
-  tmp_found_ips="$(mktemp /tmp/lss-unifi-ips-XXXXXX)"
+  # tmp_nmap_ips:  IPs confirmed by nmap (UDP 10001 + TCP 22 SSH open)
+  # tmp_tlv_macs:  ip<tab>mac pairs from TLV broadcast
+  # tmp_tlv_ips:   IPs seen via TLV broadcast (may overlap with nmap)
+  local tmp_nmap_ips tmp_tlv_macs tmp_tlv_ips
+  tmp_nmap_ips="$(mktemp /tmp/lss-unifi-ips-XXXXXX)"
   tmp_tlv_macs="$(mktemp /tmp/lss-unifi-tlv-XXXXXX)"
+  tmp_tlv_ips="$(mktemp /tmp/lss-unifi-tlvips-XXXXXX)"
 
   for _pass in 1 2 3 4 5; do
     echo "Pass $_pass/5 — scanning $subnet..."
@@ -8908,7 +8912,7 @@ unifi_device_scan() {
     while IFS= read -r scan_ip; do
       if [[ -n "$scan_ip" ]]; then
         echo "  Responding: $scan_ip"
-        printf '%s\n' "$scan_ip" >> "$tmp_found_ips"
+        printf '%s\n' "$scan_ip" >> "$tmp_nmap_ips"
         _pass_count=$(( _pass_count + 1 ))
       fi
     done < <(nmap -n -sU -sS -p "U:10001,T:22" --max-rate 200 --host-timeout 30s "$subnet" -oG - 2>/dev/null \
@@ -8933,7 +8937,7 @@ unifi_device_scan() {
       if [[ -n "$nmac" && -n "$nip" ]]; then
         echo "  TLV response: $nip  mac=$nmac"
         printf '%s\t%s\n' "$nip" "$nmac" >> "$tmp_tlv_macs"
-        printf '%s\n' "$nip" >> "$tmp_found_ips"
+        printf '%s\n' "$nip" >> "$tmp_tlv_ips"
         _tlv_count=$(( _tlv_count + 1 ))
       fi
     done < <(printf '%s\n' "$nse_out" | grep '^UNIFI_DEVICE ' || true)
@@ -8948,12 +8952,9 @@ unifi_device_scan() {
   is_ubiquiti_mac() {
     local mac
     mac="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
-    local first_octet="${mac:0:2}"
     local oui="${mac:0:8}"
-    # Locally administered MAC: second-least-significant bit of first octet set
-    local val=$((16#$first_octet))
-    if (( (val & 0x02) != 0 )); then return 0; fi
-    # Known Ubiquiti OUIs
+    # Known Ubiquiti OUIs only — locally administered MACs are NOT treated as
+    # Ubiquiti because MAC randomization (phones, laptops) also sets that bit.
     case "$oui" in
       00:15:6d|00:27:22|04:18:d6|0c:80:63|18:e8:29|1c:6a:1b) return 0 ;;
       24:5a:4c|24:a4:3c|28:70:4e|2c:be:08|44:d9:e7|60:22:32) return 0 ;;
@@ -8965,7 +8966,14 @@ unifi_device_scan() {
   }
 
   # ── Step 3: build device list ─────────────────────────────────────────────
+  # Union all IPs: nmap-confirmed + TLV-only. A device is flagged if:
+  #   - its MAC is not a known Ubiquiti OUI, OR
+  #   - it was seen only via TLV broadcast (no SSH on port 22 to confirm it)
   local flagged_entries=""
+  local tmp_all_ips
+  tmp_all_ips="$(mktemp /tmp/lss-unifi-all-XXXXXX)"
+  cat "$tmp_nmap_ips" "$tmp_tlv_ips" > "$tmp_all_ips"
+
   while IFS= read -r ip; do
     [[ -z "$ip" ]] && continue
     local mac=""
@@ -8974,14 +8982,18 @@ unifi_device_scan() {
       mac="$(arp_mac_for_ip "$ip")"
       [[ -z "$mac" ]] && mac="unknown"
     fi
-    if [[ "$mac" != "unknown" ]] && ! is_ubiquiti_mac "$mac"; then
+    # TLV-only = not seen in nmap passes (no SSH confirmation)
+    local ssh_confirmed=false
+    grep -qFx "$ip" "$tmp_nmap_ips" 2>/dev/null && ssh_confirmed=true
+
+    if { [[ "$mac" != "unknown" ]] && ! is_ubiquiti_mac "$mac"; } || [[ "$ssh_confirmed" == "false" ]]; then
       flagged_entries="${flagged_entries:+$flagged_entries,}{\"mac\":\"$mac\",\"ip\":\"$ip\"}"
     else
       entries="${entries:+$entries,}{\"mac\":\"$mac\",\"ip\":\"$ip\"}"
     fi
-  done < <(sort -u "$tmp_found_ips")
+  done < <(sort -u "$tmp_all_ips")
 
-  rm -f "$tmp_found_ips" "$tmp_tlv_macs"
+  rm -f "$tmp_nmap_ips" "$tmp_tlv_macs" "$tmp_tlv_ips" "$tmp_all_ips"
 
   local unifi_count
   unifi_count="$(printf '%s' "$entries" | grep -o '"mac"' | wc -l | tr -d ' ')"
