@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.78"
+APP_VERSION="v1.2.79"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -8880,15 +8880,25 @@ unifi_device_scan() {
     printf '%s' "$mac"
   }
 
-  # ── Step 1: nmap dual-port scan ───────────────────────────────────────────
-  # Scan UDP 10001 + TCP 22 simultaneously. Hosts with UDP 10001 open|filtered
-  # AND TCP 22 open are UniFi devices. The TCP 22 check eliminates false
-  # positives — every UniFi device runs SSH.
+  # ── Step 1a: TCP 22 scan across the whole subnet ─────────────────────────
+  # TCP scanning is fast and reliable over large ranges. This gives us the
+  # shortlist of SSH hosts (~67 on a UniFi network) to target in step 1b.
+  local ssh_hosts=()
+  while IFS= read -r h; do
+    [[ -n "$h" ]] && ssh_hosts+=("$h")
+  done < <(nmap -n -sS -p 22 "$subnet" -oG - 2>/dev/null \
+    | awk '/22\/open\/tcp/{print $2}')
+
+  # ── Step 1b: UDP 10001 scan only the SSH hosts ────────────────────────────
+  # Scanning ~67 specific IPs for UDP 10001 is fast and consistent vs scanning
+  # all 2048 IPs in a /21. Every UniFi device has UDP 10001 open|filtered.
   declare -A found_ips=()
-  while IFS= read -r scan_ip; do
-    [[ -n "$scan_ip" ]] && found_ips["$scan_ip"]=1
-  done < <(nmap -n -sU -sS -p "U:10001,T:22" "$subnet" -oG - 2>/dev/null \
-    | awk '/10001\/open/ && /22\/open\/tcp/{print $2}')
+  if [[ "${#ssh_hosts[@]}" -gt 0 ]]; then
+    while IFS= read -r scan_ip; do
+      [[ -n "$scan_ip" ]] && found_ips["$scan_ip"]=1
+    done < <(nmap -n -sU -p 10001 "${ssh_hosts[@]}" -oG - 2>/dev/null \
+      | awk '/10001\/open/{print $2}')
+  fi
 
   # ── Step 2: enrich MACs via NSE broadcast discovery ───────────────────────
   # TLV responses give us the device's own reported MAC, which is more reliable
