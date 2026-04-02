@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.87"
+APP_VERSION="v1.2.88"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -8846,7 +8846,8 @@ unifi_device_scan() {
   echo "Subnet:      ${subnet:-unknown}"
   echo "Protocol:    UDP 10001 + TCP 22 (UniFi fingerprint) + ARP"
   echo
-  echo "Scanning..."
+  echo "Running 5 scan passes to maximise coverage on large networks."
+  echo "Devices are shown as they respond — duplicates across passes are normal."
   echo
 
   # Strategy: scan for hosts with UDP port 10001 (open|filtered) AND TCP port 22
@@ -8902,9 +8903,18 @@ unifi_device_scan() {
   tmp_tlv_macs="$(mktemp /tmp/lss-unifi-tlv-XXXXXX)"
 
   for _pass in 1 2 3 4 5; do
-    nmap -n -sU -sS -p "U:10001,T:22" --max-rate 200 --host-timeout 30s "$subnet" -oG - 2>/dev/null \
-      | awk '/10001\/open/ && /22\/open\/tcp/{print $2}' \
-      >> "$tmp_found_ips"
+    echo "Pass $_pass/5 — scanning $subnet..."
+    local _pass_count=0
+    while IFS= read -r scan_ip; do
+      if [[ -n "$scan_ip" ]]; then
+        echo "  Responding: $scan_ip"
+        printf '%s\n' "$scan_ip" >> "$tmp_found_ips"
+        _pass_count=$(( _pass_count + 1 ))
+      fi
+    done < <(nmap -n -sU -sS -p "U:10001,T:22" --max-rate 200 --host-timeout 30s "$subnet" -oG - 2>/dev/null \
+      | awk '/10001\/open/ && /22\/open\/tcp/{print $2}')
+    echo "  Pass $_pass complete — $_pass_count device(s) responded."
+    echo
   done
 
   # ── Step 2: enrich MACs via NSE broadcast discovery ───────────────────────
@@ -8912,17 +8922,23 @@ unifi_device_scan() {
   # than ARP on some networks. Devices found here are added to found_ips too.
   local nse_script="$APP_ROOT/unifi-discover.nse"
   if [[ -f "$nse_script" ]]; then
+    echo "Broadcast discovery — sending UniFi TLV probes (15s listen window)..."
     local nse_out
     nse_out="$(nmap --script "$nse_script" 2>/dev/null || true)"
+    local _tlv_count=0
     while IFS= read -r line; do
       local nmac nip
       nmac="$(printf '%s' "$line" | sed 's/.*mac=\([^ ]*\).*/\1/')"
       nip="$(printf '%s' "$line" | sed 's/.*ip=\([^ ]*\).*/\1/')"
       if [[ -n "$nmac" && -n "$nip" ]]; then
+        echo "  TLV response: $nip  mac=$nmac"
         printf '%s\t%s\n' "$nip" "$nmac" >> "$tmp_tlv_macs"
         printf '%s\n' "$nip" >> "$tmp_found_ips"
+        _tlv_count=$(( _tlv_count + 1 ))
       fi
     done < <(printf '%s\n' "$nse_out" | grep '^UNIFI_DEVICE ' || true)
+    echo "  Broadcast complete — $_tlv_count device(s) replied via TLV."
+    echo
   fi
 
   # ── Helper: Ubiquiti OUI check ────────────────────────────────────────────
