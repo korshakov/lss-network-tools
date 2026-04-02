@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.76"
+APP_VERSION="v1.2.77"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -8890,10 +8890,13 @@ unifi_device_scan() {
   done < <(nmap -n -sU -sS -p "U:10001,T:22" "$subnet" -oG - 2>/dev/null \
     | awk '/10001\/open/ && /22\/open\/tcp/{print $2}')
 
-  # ── Step 2: NSE broadcast discovery (parallel enrichment) ─────────────────
-  # Run alongside the nmap scan results to get TLV-confirmed MACs and catch
-  # any devices that respond to discovery but not to the nmap probe.
+  # ── Step 2: TLV verification via broadcast NSE + unicast Python ───────────
+  # Send the actual UniFi discovery packet to all candidates. Only real UniFi
+  # devices respond with valid TLV. Non-UniFi devices (e.g. OPNsense) that
+  # passed the port scan filter are exposed here and marked unverified.
   declare -A tlv_macs=()
+
+  # 2a: broadcast NSE (catches devices that respond to broadcast discovery)
   local nse_script="$APP_ROOT/unifi-discover.nse"
   if [[ -f "$nse_script" ]]; then
     local nse_out
@@ -8902,62 +8905,136 @@ unifi_device_scan() {
       local nmac nip
       nmac="$(printf '%s' "$line" | sed 's/.*mac=\([^ ]*\).*/\1/')"
       nip="$(printf '%s' "$line" | sed 's/.*ip=\([^ ]*\).*/\1/')"
-      if [[ -n "$nmac" && -n "$nip" ]]; then
-        tlv_macs["$nip"]="$nmac"
-        found_ips["$nip"]=1
-      fi
+      [[ -n "$nmac" && -n "$nip" ]] && tlv_macs["$nip"]="$nmac"
     done < <(printf '%s\n' "$nse_out" | grep '^UNIFI_DEVICE ' || true)
   fi
 
-  # ── Step 3: build device list ─────────────────────────────────────────────
+  # 2b: unicast Python discovery — sends to each candidate individually.
+  # For unicast, UniFi devices reply to the sender's ephemeral port (not 10001)
+  # so no special binding is needed. This catches adopted devices that ignore
+  # broadcast discovery but still respond to unicast.
+  local candidate_list=()
   for ip in "${!found_ips[@]}"; do
-    local mac=""
-    # Prefer TLV-confirmed MAC, fall back to ARP
-    if [[ -n "${tlv_macs[$ip]:-}" ]]; then
-      mac="${tlv_macs[$ip]}"
-    else
-      mac="$(arp_mac_for_ip "$ip")"
-    fi
-    [[ -z "$mac" ]] && mac="unknown"
-    entries="${entries:+$entries,}{\"mac\":\"$mac\",\"ip\":\"$ip\"}"
+    [[ -z "${tlv_macs[$ip]:-}" ]] && candidate_list+=("$ip")
   done
 
-  devices_found="${#found_ips[@]}"
+  if [[ "${#candidate_list[@]}" -gt 0 ]] && command -v python3 &>/dev/null; then
+    local py_out
+    py_out="$(python3 - "${candidate_list[@]}" <<'PYEOF'
+import socket, struct, sys, time, json
 
-  [[ -n "$entries" ]] && device_list="[$entries]"
+hosts   = sys.argv[1:]
+packets = [b'\x01\x00\x00\x00', b'\x02\x0a\x00\x04\x01\x00\x00\x01']
+results = {}
+
+def parse_tlv(data, src_ip):
+    if len(data) < 4: return None
+    offset, mac, ip = 4, None, None
+    while offset + 3 <= len(data):
+        tlv_type = data[offset]
+        tlv_len  = struct.unpack('>H', data[offset+1:offset+3])[0]
+        if offset + 3 + tlv_len > len(data): break
+        v = data[offset+3:offset+3+tlv_len]
+        offset += 3 + tlv_len
+        if tlv_type == 0x01 and len(v) == 6:
+            mac = ':'.join('%02x' % b for b in v)
+        elif tlv_type == 0x02 and len(v) >= 10:
+            mac = ':'.join('%02x' % b for b in v[:6])
+            ip  = '.'.join(str(b) for b in v[6:10])
+    return {'mac': mac, 'ip': ip or src_ip} if mac else None
+
+try:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(0.5)
+    for host in hosts:
+        for pkt in packets:
+            try: sock.sendto(pkt, (host, 10001))
+            except Exception: pass
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        try:
+            data, addr = sock.recvfrom(65535)
+            dev = parse_tlv(data, addr[0])
+            if dev: results[addr[0]] = dev
+        except socket.timeout: continue
+        except Exception: continue
+    sock.close()
+except Exception: pass
+
+print(json.dumps(results))
+PYEOF
+)" || true
+
+    while IFS= read -r pip; do
+      local pmac
+      pmac="$(printf '%s\n' "$py_out" | jq -r --arg ip "$pip" '.[$ip].mac // empty' 2>/dev/null || true)"
+      [[ -n "$pmac" ]] && tlv_macs["$pip"]="$pmac"
+    done < <(printf '%s\n' "${candidate_list[@]}")
+  fi
+
+  # ── Step 3: build confirmed and unverified lists ──────────────────────────
+  local confirmed_entries="" unverified_entries=""
+  local confirmed_count=0 unverified_count=0
+
+  for ip in "${!found_ips[@]}"; do
+    local mac=""
+    if [[ -n "${tlv_macs[$ip]:-}" ]]; then
+      mac="${tlv_macs[$ip]}"
+      confirmed_entries="${confirmed_entries:+$confirmed_entries,}{\"mac\":\"$mac\",\"ip\":\"$ip\",\"verified\":true}"
+      confirmed_count=$((confirmed_count + 1))
+    else
+      mac="$(arp_mac_for_ip "$ip")"
+      [[ -z "$mac" ]] && mac="unknown"
+      unverified_entries="${unverified_entries:+$unverified_entries,}{\"mac\":\"$mac\",\"ip\":\"$ip\",\"verified\":false}"
+      unverified_count=$((unverified_count + 1))
+    fi
+  done
+
+  devices_found=$((confirmed_count + unverified_count))
+  local all_entries="${confirmed_entries}${confirmed_entries:+${unverified_entries:+,}}${unverified_entries}"
+  [[ -n "$all_entries" ]] && device_list="[$all_entries]"
 
   jq -n \
     --arg iface "$iface" \
     --arg bcast "$broadcast_addr" \
     --arg subnet "${subnet:-}" \
     --argjson found "$devices_found" \
+    --argjson confirmed "$confirmed_count" \
     --argjson devs "$device_list" \
-    '{status:"success",success:true,error:null,warnings:[],interface:$iface,broadcast:$bcast,subnet:$subnet,devices_found:$found,devices:$devs}' \
+    '{status:"success",success:true,error:null,warnings:[],interface:$iface,broadcast:$bcast,subnet:$subnet,devices_found:$found,devices_confirmed:$confirmed,devices:$devs}' \
     > "$json_file"
   validate_json_file "$json_file" || true
 
   if [[ "$devices_found" -eq 0 ]]; then
-    if [[ -n "$py_error" ]]; then
-      echo "No UniFi devices found. (Socket error: $py_error)"
-    else
-      echo "No UniFi devices found."
-    fi
+    echo "No UniFi devices found."
   else
-    echo "Found $devices_found UniFi device(s):"
-    echo
-    printf "%-20s  %s\n" "MAC Address" "IP Address"
-    printf "%-20s  %s\n" "--------------------" "---------------"
-    echo "$device_list" | jq -r '.[] | [.mac, .ip] | @tsv' 2>/dev/null | \
-      while IFS=$'\t' read -r mac ip; do
-        printf "%-20s  %s\n" "$mac" "$ip"
-      done
+    if [[ "$confirmed_count" -gt 0 ]]; then
+      echo "Found $confirmed_count confirmed UniFi device(s):"
+      echo
+      printf "%-20s  %s\n" "MAC Address" "IP Address"
+      printf "%-20s  %s\n" "--------------------" "---------------"
+      printf '%s\n' "$device_list" | jq -r '.[] | select(.verified==true) | [.mac, .ip] | @tsv' 2>/dev/null | \
+        while IFS=$'\t' read -r mac ip; do
+          printf "%-20s  %s\n" "$mac" "$ip"
+        done
+    fi
+    if [[ "$unverified_count" -gt 0 ]]; then
+      echo
+      echo "Unverified ($unverified_count) — port scan match but no TLV response:"
+      printf "%-20s  %s\n" "MAC Address" "IP Address"
+      printf "%-20s  %s\n" "--------------------" "---------------"
+      printf '%s\n' "$device_list" | jq -r '.[] | select(.verified==false) | [.mac, .ip] | @tsv' 2>/dev/null | \
+        while IFS=$'\t' read -r mac ip; do
+          printf "%-20s  %s\n" "$mac" "$ip"
+        done
+    fi
   fi
 }
 
 render_unifi_discovery_report() {
   local file="$1"
   local report_file="$2"
-  local status error_code error_message iface broadcast devices_found
+  local status error_code error_message iface broadcast devices_found devices_confirmed
 
   status="$(jq -r '.status // "success"' "$file" 2>/dev/null)"
   error_code="$(jq -r '.error.code // empty' "$file" 2>/dev/null)"
@@ -8965,22 +9042,40 @@ render_unifi_discovery_report() {
   iface="$(jq -r '.interface // "unknown"' "$file" 2>/dev/null)"
   broadcast="$(jq -r '.broadcast // "unknown"' "$file" 2>/dev/null)"
   devices_found="$(jq -r '.devices_found // 0' "$file" 2>/dev/null)"
+  devices_confirmed="$(jq -r '.devices_confirmed // .devices_found // 0' "$file" 2>/dev/null)"
 
   {
-    echo "Status:          ${status:-unknown}"
-    [[ -n "$error_code" ]] && echo "Error Code:      $error_code"
-    [[ -n "$error_message" ]] && echo "Error Message:   $error_message"
-    echo "Interface:       ${iface}"
-    echo "Broadcast:       ${broadcast}"
-    echo "Devices Found:   ${devices_found}"
+    echo "Status:              ${status:-unknown}"
+    [[ -n "$error_code" ]] && echo "Error Code:          $error_code"
+    [[ -n "$error_message" ]] && echo "Error Message:       $error_message"
+    echo "Interface:           ${iface}"
+    echo "Devices Found:       ${devices_found}"
+    echo "Devices Confirmed:   ${devices_confirmed}"
     echo
     if [[ "$devices_found" -gt 0 ]]; then
-      printf "%-20s  %s\n" "MAC Address" "IP Address"
-      printf "%-20s  %s\n" "--------------------" "---------------"
-      jq -r '.devices[]? | [.mac, .ip] | @tsv' "$file" 2>/dev/null | \
-        while IFS=$'\t' read -r mac ip; do
-          printf "%-20s  %s\n" "$mac" "$ip"
-        done
+      local confirmed_count
+      confirmed_count="$(jq '[.devices[]? | select(.verified==true)] | length' "$file" 2>/dev/null || echo 0)"
+      if [[ "$confirmed_count" -gt 0 ]]; then
+        echo "Confirmed UniFi Devices (TLV verified):"
+        printf "%-20s  %s\n" "MAC Address" "IP Address"
+        printf "%-20s  %s\n" "--------------------" "---------------"
+        jq -r '.devices[]? | select(.verified==true) | [.mac, .ip] | @tsv' "$file" 2>/dev/null | \
+          while IFS=$'\t' read -r mac ip; do
+            printf "%-20s  %s\n" "$mac" "$ip"
+          done
+      fi
+      local unverified_count
+      unverified_count="$(jq '[.devices[]? | select(.verified==false)] | length' "$file" 2>/dev/null || echo 0)"
+      if [[ "$unverified_count" -gt 0 ]]; then
+        echo
+        echo "Unverified (port scan only, no TLV response):"
+        printf "%-20s  %s\n" "MAC Address" "IP Address"
+        printf "%-20s  %s\n" "--------------------" "---------------"
+        jq -r '.devices[]? | select(.verified==false) | [.mac, .ip] | @tsv' "$file" 2>/dev/null | \
+          while IFS=$'\t' read -r mac ip; do
+            printf "%-20s  %s\n" "$mac" "$ip"
+          done
+      fi
     else
       echo "No UniFi devices found."
     fi
