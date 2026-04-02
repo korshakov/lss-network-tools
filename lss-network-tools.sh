@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.85"
+APP_VERSION="v1.2.86"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -8028,24 +8028,25 @@ except OSError:
 # Send socket — standard DGRAM broadcast
 send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 send_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-# Linux: pin both sockets to the chosen interface via SO_BINDTODEVICE
-try:
-    SO_BINDTODEVICE = 25
-    recv_sock.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, iface.encode() + b'\x00')
-    send_sock.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, iface.encode() + b'\x00')
-except (AttributeError, OSError):
-    # macOS does not support SO_BINDTODEVICE. Without it, send_sock routes via
-    # the default route interface (e.g. Wi-Fi) instead of the selected interface
-    # (e.g. USB Realtek dongle). Fix: bind send_sock to the local IP of the
-    # chosen interface so the OS routes traffic out of the correct NIC.
+
+def pin_sock_to_iface(sock, iface):
+    """Pin a socket to a specific interface, cross-platform."""
+    # Linux: SO_BINDTODEVICE (SOL_SOCKET, 25)
     try:
-        import subprocess as _sp, re as _re
-        _out = _sp.check_output(['ifconfig', iface], stderr=_sp.DEVNULL).decode()
-        _m = _re.search(r'inet (\d+\.\d+\.\d+\.\d+)', _out)
-        if _m:
-            send_sock.bind((_m.group(1), 0))
-    except Exception:
+        sock.setsockopt(socket.SOL_SOCKET, 25, iface.encode() + b'\x00')
+        return
+    except (AttributeError, OSError):
         pass
+    # macOS: IP_BOUND_IF (IPPROTO_IP, 25) — pins by interface index, works
+    # for both send and recv on any interface without needing a pre-existing IP.
+    try:
+        idx = socket.if_nametoindex(iface)
+        sock.setsockopt(socket.IPPROTO_IP, 25, struct.pack('I', idx))
+    except (AttributeError, OSError):
+        pass
+
+pin_sock_to_iface(recv_sock, iface)
+pin_sock_to_iface(send_sock, iface)
 
 try:
     for i in range(probe_count):
