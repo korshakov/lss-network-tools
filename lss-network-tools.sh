@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.125"
+APP_VERSION="v1.2.126"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -9821,15 +9821,13 @@ find_device_by_mac() {
   printf "${green}[FOUND]${reset} %s → %s\n" "$norm_mac" "$_found_ip"
   echo
 
-  # ── Step 2: UniFi verification ────────────────────────────────────────────
-  echo "Verifying device identity..."
+  # ── Step 2: UniFi verification (silent — only print if confirmed) ─────────
   local _is_unifi=false
   local -a _confirmed_by=()
 
   # Check 1: OUI
   if is_ubiquiti_oui_local "$norm_mac"; then
     _confirmed_by+=("oui")
-    printf "  ${green}[OK]${reset} Ubiquiti OUI match\n"
   fi
 
   # Check 2: TLV probe on UDP 10001
@@ -9880,7 +9878,6 @@ PYEOF
   rm -f "$_tmp_tlv_py"
   if [[ "$_tlv_result" == "UNIFI_CONFIRMED" ]]; then
     _confirmed_by+=("tlv")
-    printf "  ${green}[OK]${reset} UniFi TLV response on UDP 10001\n"
   fi
 
   # Check 3: SSH banner — Dropbear = Ubiquiti
@@ -9900,18 +9897,13 @@ finally:
 " 2>/dev/null | head -1 | tr -d '\r\n')"
   if printf '%s' "$_banner" | grep -qi 'dropbear'; then
     _confirmed_by+=("ssh_banner")
-    printf "  ${green}[OK]${reset} Dropbear SSH banner: %s\n" "$_banner"
   fi
 
   if [[ "${#_confirmed_by[@]}" -gt 0 ]]; then
     _is_unifi=true
+    printf "  ${green}[CONFIRMED]${reset} UniFi device (confirmed via: %s)\n" "$(printf '%s ' "${_confirmed_by[@]}")"
     echo
-    printf "  ${green}[CONFIRMED]${reset} This is a UniFi device.\n"
-  else
-    printf "  ${yellow}[UNCONFIRMED]${reset} Device found at %s but could not confirm as UniFi.\n" "$_found_ip"
-    [[ -n "$_banner" ]] && printf "  SSH banner: %s\n" "$_banner"
   fi
-  echo
 
   # ── Build JSON ────────────────────────────────────────────────────────────
   local _cb_json="["
