@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.101"
+APP_VERSION="v1.2.102"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -512,6 +512,25 @@ about_and_health() {
   else
     printf "${red}[MISSING]${reset} unifi-discover.nse not found at $nse_path\n"
     issues=$((issues + 1))
+  fi
+  local _oui_cache_path="/usr/local/share/lss-network-tools/ubiquiti-oui-cache.txt"
+  if [[ -f "$_oui_cache_path" ]]; then
+    local _oui_count _oui_age_days _oui_mtime _oui_now
+    _oui_count="$(wc -l < "$_oui_cache_path" | tr -d ' ')"
+    if [[ "$OS" == "macos" ]]; then
+      _oui_mtime="$(stat -f %m "$_oui_cache_path" 2>/dev/null || echo 0)"
+    else
+      _oui_mtime="$(stat -c %Y "$_oui_cache_path" 2>/dev/null || echo 0)"
+    fi
+    _oui_now="$(date +%s)"
+    _oui_age_days=$(( (_oui_now - _oui_mtime) / 86400 ))
+    if find "$_oui_cache_path" -mtime -30 -print 2>/dev/null | grep -q .; then
+      printf "${green}[OK]${reset} Ubiquiti OUI cache — %s blocks, %s day(s) old (refreshes monthly)\n" "$_oui_count" "$_oui_age_days"
+    else
+      printf "${yellow}[WARN]${reset} Ubiquiti OUI cache — %s blocks, %s day(s) old (will refresh on next scan)\n" "$_oui_count" "$_oui_age_days"
+    fi
+  else
+    printf "${yellow}[WARN]${reset} Ubiquiti OUI cache not yet created (will fetch on first UniFi scan)\n"
   fi
 
   echo
