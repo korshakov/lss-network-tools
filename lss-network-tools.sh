@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.110"
+APP_VERSION="v1.2.111"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -9019,12 +9019,12 @@ PYEOF
   local tmp_arp_macs
   tmp_arp_macs="$(mktemp /tmp/lss-unifi-arpmacs-XXXXXX)"
 
-  echo "Step 1: ARP host discovery on $subnet (5 passes)..."
+  echo "Step 1: ARP host discovery on $subnet (10 passes)..."
   # Parse IP+MAC pairs directly from nmap normal output — bypasses the kernel
   # ARP cache which nmap (raw sockets) does not populate on Linux.
   local _tmp_arp_raw
   _tmp_arp_raw="$(mktemp /tmp/lss-unifi-arpraw-XXXXXX)"
-  for _arp_pass in 1 2 3 4 5; do
+  for _arp_pass in 1 2 3 4 5 6 7 8 9 10; do
     nmap -n -sn "$subnet" 2>/dev/null | awk '
       /^Nmap scan report for /{
         if (ip!="" && mac!="") print ip"\t"mac
@@ -9056,9 +9056,38 @@ PYEOF
   rm -f "$_tmp_dedup_py"
   rm -f "$_tmp_arp_raw"
   awk -F'\t' '{print $1}' "$tmp_arp_macs" > "$tmp_nmap_ips"
+  local arp_count
+  arp_count="$(wc -l < "$tmp_nmap_ips" | tr -d ' ')"
+  echo "  $arp_count live host(s) found via ARP."
+
+  # ── Step 1b: UDP 10001 sweep (complement to ARP) ─────────────────────────
+  # Managed switches and devices on different VLANs may not respond to ARP
+  # from the scanning machine but are reachable via IP routing. A UDP 10001
+  # sweep finds these — any host responding is likely a UniFi device. Results
+  # are merged with the ARP list so TLV/OUI can confirm them.
+  echo "  Running UDP 10001 sweep for IP-routed devices (10 passes)..."
+  local _tmp_udp_raw
+  _tmp_udp_raw="$(mktemp /tmp/lss-unifi-udp-XXXXXX)"
+  for _udp_pass in 1 2 3 4 5 6 7 8 9 10; do
+    nmap -n -sU -p 10001 --max-rate 300 --host-timeout 15s "$subnet" -oG - 2>/dev/null \
+      | awk '/10001\/open/{print $2}' >> "$_tmp_udp_raw"
+  done
+  local udp_new=0
+  while IFS= read -r udp_ip; do
+    [[ -z "$udp_ip" ]] && continue
+    if ! grep -qFx "$udp_ip" "$tmp_nmap_ips" 2>/dev/null; then
+      echo "$udp_ip" >> "$tmp_nmap_ips"
+      udp_new=$(( udp_new + 1 ))
+    fi
+  done < <(sort -u "$_tmp_udp_raw")
+  rm -f "$_tmp_udp_raw"
+  if [[ "$udp_new" -gt 0 ]]; then
+    echo "  $udp_new additional host(s) found via UDP sweep."
+  fi
+
   local discovered_count
   discovered_count="$(wc -l < "$tmp_nmap_ips" | tr -d ' ')"
-  echo "  $discovered_count live host(s) found."
+  echo "  $discovered_count total host(s) to fingerprint."
   echo
 
   # ── Step 2: TLV fingerprinting ───────────────────────────────────────────
