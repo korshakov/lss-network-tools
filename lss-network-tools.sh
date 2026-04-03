@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.98"
+APP_VERSION="v1.2.99"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -9043,15 +9043,21 @@ PYEOF
   # that have UDP 10001 open but don't respond to probes (e.g. USG/UDM
   # firewalls and some switches). If either confirms it, it's a UniFi device.
   is_ubiquiti_oui() {
+    # Complete list of 45 MA-L OUI blocks registered to Ubiquiti Inc in the
+    # IEEE registry (source: IEEE MA-L registry, verified 2026-04-03).
+    # Removed: 0c:80:63, 2c:be:08 (not Ubiquiti), a8:9c:ed (wrong, is a8:9c:6c)
     local mac
     mac="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
     local oui="${mac:0:8}"
     case "$oui" in
-      00:15:6d|00:27:22|04:18:d6|0c:80:63|0c:ea:14|18:e8:29|1c:6a:1b) return 0 ;;
-      24:5a:4c|24:a4:3c|28:70:4e|2c:be:08|44:d9:e7|60:22:32) return 0 ;;
-      68:72:51|68:d7:9a|74:ac:b9|78:45:58|78:8a:20|80:2a:a8) return 0 ;;
-      9c:05:d6|ac:8b:a9|b4:fb:e4|d8:b3:70|dc:9f:db|e0:63:da) return 0 ;;
-      e4:38:83|f4:e2:c6|fc:ec:da|60:22:32|a8:9c:ed) return 0 ;;
+      00:15:6d|00:27:22|04:18:d6|0c:ea:14|18:e8:29|1c:0b:8b|1c:6a:1b) return 0 ;;
+      24:5a:4c|24:a4:3c|28:70:4e|44:d9:e7|58:d6:1f|60:22:32) return 0 ;;
+      68:72:51|68:d7:9a|6c:63:f8|70:a7:41|74:83:c2|74:ac:b9) return 0 ;;
+      74:f9:2c|74:fa:29|78:45:58|78:8a:20|80:2a:a8|84:78:48) return 0 ;;
+      8c:30:66|8c:ed:e1|90:41:b2|94:2a:6f|9c:05:d6|a4:f8:ff) return 0 ;;
+      a8:9c:6c|ac:8b:a9|b4:fb:e4|cc:35:d9|d0:21:f9|d4:89:c1) return 0 ;;
+      d8:b3:70|dc:9f:db|e0:63:da|e4:38:83|f0:9f:c2|f4:92:bf) return 0 ;;
+      f4:e2:c6|fc:ec:da) return 0 ;;
     esac
     return 1
   }
