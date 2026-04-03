@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.130"
+APP_VERSION="v1.2.131"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -39,6 +39,7 @@ INSTALL_DEPS_MODE=0
 OS=""
 SELECTED_INTERFACE=""
 SHOW_FUNCTION_HEADER=1
+TASK_OUTPUT_INDENT=""
 SPINNER_PID=""
 NETWORK_INTERRUPTED=false
 _GOTO_MAIN_MENU=false
@@ -4655,7 +4656,7 @@ spinner() {
   local message="${1:-Scanning...}"
   local i=0
   local -a spin_frames
-  local _tty=/dev/tty
+  local _indent="${TASK_OUTPUT_INDENT:-}"
 
   if [[ "$DEBUG_MODE" -eq 1 ]]; then
     echo "$message"
@@ -4670,17 +4671,18 @@ spinner() {
   fi
 
   while kill -0 "$pid" 2>/dev/null; do
-    printf "\r[%s] %s" "${spin_frames[$i]}" "$message" > "$_tty" 2>/dev/null || true
+    printf "\r%s[%s] %s" "$_indent" "${spin_frames[$i]}" "$message" >&2
     i=$(( (i + 1) % ${#spin_frames[@]} ))
     sleep 0.2
   done
-  printf "\r%-40s\n" "" > "$_tty" 2>/dev/null || true
+  printf "\r\033[K" >&2
 }
 
 start_spinner_line() {
   local label="$1"
   local i=0
   local -a spin_frames
+  local _indent="${TASK_OUTPUT_INDENT:-}"
 
   if [[ "$DEBUG_MODE" -eq 1 ]]; then
     echo "$label"
@@ -4695,7 +4697,7 @@ start_spinner_line() {
 
   (
     while true; do
-      printf "\r%s %s" "$label" "${spin_frames[$i]}" > /dev/tty 2>/dev/null || true
+      printf "\r%s%s %s" "$_indent" "$label" "${spin_frames[$i]}" >&2
       i=$(( (i + 1) % ${#spin_frames[@]} ))
       sleep 0.2
     done
@@ -4714,7 +4716,7 @@ stop_spinner_line() {
     SPINNER_PID=""
   fi
 
-  printf "\r\033[K" > /dev/tty 2>/dev/null || true
+  printf "\r\033[K" >&2
 }
 
 run_with_stage_spinner() {
@@ -10130,11 +10132,14 @@ run_task_with_results_output() {
   printf "${cyan}================================================${reset}\n"
   echo
   SHOW_FUNCTION_HEADER=0
+  TASK_OUTPUT_INDENT="  "
   if ! run_task_by_id "$func_id" | sed 's/^/  /'; then
     SHOW_FUNCTION_HEADER=1
+    TASK_OUTPUT_INDENT=""
     return 1
   fi
   SHOW_FUNCTION_HEADER=1
+  TASK_OUTPUT_INDENT=""
   echo
   printf "${cyan}================================================${reset}\n"
   echo
