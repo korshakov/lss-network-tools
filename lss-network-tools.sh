@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.114"
+APP_VERSION="v1.2.115"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -9512,222 +9512,117 @@ unifi_adoption() {
   local json_file
   json_file="$(task_output_path 19)"
 
-  local red='\033[0;31m'
   local green='\033[0;32m'
   local yellow='\033[1;33m'
+  local red='\033[0;31m'
   local reset='\033[0m'
 
   # ── Dependency: sshpass ───────────────────────────────────────────────────
   if ! command -v sshpass &>/dev/null; then
-    printf "${red}[MISSING]${reset} sshpass is required for adoption but was not found.\n"
+    printf "${red}[MISSING]${reset} sshpass is required but was not found.\n"
     if [[ "$OS" == "macos" ]]; then
       echo "  Install with: brew install hudochenkov/sshpass/sshpass"
     else
       echo "  Install with: sudo apt install sshpass"
     fi
     jq -n --arg iface "$iface" \
-      '{status:"failed",success:false,error:{code:"missing_dependency",message:"sshpass is required for UniFi adoption"},interface:$iface,devices_attempted:0,devices_adopted:0,devices:[]}' \
+      '{status:"failed",success:false,error:{code:"missing_dependency",message:"sshpass is required for UniFi adoption"},interface:$iface,devices_found:0,devices_adopted:0,devices:[]}' \
       > "$json_file"
     return 1
   fi
 
-  # ── Device source ─────────────────────────────────────────────────────────
-  local -a adopt_ips=()
-  local task18_json
-  task18_json="$(task_output_path 18)"
-  local t18_count=0
-  if [[ -f "$task18_json" ]]; then
-    t18_count="$(jq -r '.devices_found // 0' "$task18_json" 2>/dev/null || echo 0)"
-  fi
-
-  if [[ "$t18_count" -gt 0 ]]; then
-    echo "Task 18 scan found $t18_count device(s) in this run."
-    echo "  [1] Use those devices"
-    echo "  [2] Enter IP addresses manually"
-    echo
-    local source_choice
-    read -r -p "Choose source [1]: " source_choice
-    source_choice="${source_choice:-1}"
-  else
-    local source_choice="2"
-    echo "No Task 18 scan found in this run. Enter devices manually."
-    echo
-  fi
-
-  if [[ "$source_choice" == "1" ]]; then
-    while IFS= read -r _ip; do
-      [[ -n "$_ip" ]] && adopt_ips+=("$_ip")
-    done < <(jq -r '.devices[].ip // empty' "$task18_json" 2>/dev/null)
-    echo "  ${#adopt_ips[@]} device(s) loaded."
-    echo
-  else
-    echo "Enter IP addresses to adopt (one per line, blank line when done):"
-    while true; do
-      local _ip
-      read -r -p "  IP: " _ip
-      [[ -z "$_ip" ]] && break
-      adopt_ips+=("$_ip")
-    done
-    echo
-  fi
-
-  if [[ "${#adopt_ips[@]}" -eq 0 ]]; then
-    echo "No devices specified. Exiting."
-    return 0
-  fi
-
-  # ── Controller details ────────────────────────────────────────────────────
-  local controller_domain controller_port use_https inform_url
+  # ── Step 1: Ask for controller domain and credentials ─────────────────────
+  local controller_domain controller_port use_https inform_url ssh_user ssh_pass
   read -r -p "Controller domain or IP: " controller_domain
   read -r -p "Controller port [8080]: " controller_port
   controller_port="${controller_port:-8080}"
   if [[ "$controller_port" == "443" ]]; then
-    use_https="y"
-  else
-    read -r -p "Use HTTPS? [y/N]: " use_https
-  fi
-  if [[ "$use_https" =~ ^[Yy]$ ]]; then
     inform_url="https://${controller_domain}:${controller_port}/inform"
   else
-    inform_url="http://${controller_domain}:${controller_port}/inform"
+    read -r -p "Use HTTPS? [y/N]: " use_https
+    if [[ "$use_https" =~ ^[Yy]$ ]]; then
+      inform_url="https://${controller_domain}:${controller_port}/inform"
+    else
+      inform_url="http://${controller_domain}:${controller_port}/inform"
+    fi
   fi
-
   echo
-  echo "Controller SSH credentials (used for re-adoption after switch reboot):"
-  local ssh_user ssh_pass
-  read -r -p "  Username: " ssh_user
-  read -r -s -p "  Password: " ssh_pass
+  read -r -p "SSH Username: " ssh_user
+  read -r -s -p "SSH Password: " ssh_pass
   echo
-
   echo
   echo "Inform URL:  $inform_url"
-  echo "Targets:     ${#adopt_ips[@]} device(s)"
   echo
-  read -r -p "Proceed? [y/N]: " _confirm
-  if [[ ! "$_confirm" =~ ^[Yy]$ ]]; then
-    echo "Cancelled."
+
+  # ── Step 2: Scan for UniFi devices via UDP 10001 ─────────────────────────
+  local subnet
+  subnet="$(get_interface_network_cidr "$iface" 2>/dev/null || true)"
+  if [[ -z "$subnet" ]]; then
+    echo "Could not determine subnet for $iface."
+    return 1
+  fi
+
+  echo "Scanning $subnet for UniFi devices on UDP 10001..."
+  local tmp_scan
+  tmp_scan="$(mktemp /tmp/lss-unifi-adopt-scan-XXXXXX)"
+  nmap -n -sU -p 10001 --max-rate 300 --host-timeout 15s "$subnet" -oG - 2>/dev/null \
+    | awk '/10001\/open/{print $2}' | sort -u > "$tmp_scan"
+
+  local found_count
+  found_count="$(wc -l < "$tmp_scan" | tr -d ' ')"
+  echo "  $found_count device(s) found."
+  echo
+
+  if [[ "$found_count" -eq 0 ]]; then
+    echo "No devices found to adopt."
+    rm -f "$tmp_scan"
+    jq -n --arg iface "$iface" --arg subnet "$subnet" --arg inform_url "$inform_url" --arg controller "$controller_domain" \
+      '{status:"success",success:true,controller:$controller,inform_url:$inform_url,interface:$iface,subnet:$subnet,devices_found:0,devices_adopted:0,devices:[]}' \
+      > "$json_file"
     return 0
   fi
-  echo
 
-  # ── Temp file to track results (avoid bash 3 assoc array limits) ──────────
-  local tmp_results
-  tmp_results="$(mktemp /tmp/lss-unifi-adopt-XXXXXX)"
+  # ── Step 3: SSH into each device and send set-inform ─────────────────────
+  echo "Attempting adoption..."
+  local devices_json="[" first=true adopted=0 failed=0
 
-  # ── Helper: attempt one SSH set-inform ───────────────────────────────────
-  _adopt_ssh() {
-    local _user="$1" _pass="$2" _ip="$3"
-    sshpass -p "$_pass" ssh \
-      -o StrictHostKeyChecking=no \
-      -o ConnectTimeout=5 \
-      -o UserKnownHostsFile=/dev/null \
-      -o LogLevel=ERROR \
-      "${_user}@${_ip}" \
-      "mca-cli-op set-inform $inform_url" 2>/dev/null
-  }
-
-  # ── Round 1: Default credentials ─────────────────────────────────────────
-  echo "Round 1: Attempting adoption with default credentials..."
-  local r1_sent=0
-  for ip in "${adopt_ips[@]}"; do
-    local r1="failed"
-    for cred in "ubnt/ubnt" "ui/ui"; do
-      local cu="${cred%%/*}" cp="${cred##*/}"
-      if _adopt_ssh "$cu" "$cp" "$ip"; then
-        r1="adopted"
-        r1_sent=$(( r1_sent + 1 ))
-        printf "  ${green}[OK]${reset} %-18s  set-inform sent (%s)\n" "$ip" "$cu"
-        break
-      fi
-    done
-    if [[ "$r1" == "failed" ]]; then
-      printf "  ${yellow}[--]${reset} %-18s  no response (already adopted or offline)\n" "$ip"
-    fi
-    echo "r1:$ip:$r1" >> "$tmp_results"
-  done
-  echo "  Round 1 complete — $r1_sent set-inform(s) sent."
-  echo
-
-  # ── Wait for switches to reboot and reconnect ────────────────────────────
-  echo "Waiting 45s for switches to reboot and reconnect..."
-  local i
-  for i in $(seq 45 -1 1); do
-    printf "\r  %2ds remaining..." "$i"
-    sleep 1
-  done
-  printf "\r  Done.                    \n"
-  echo
-
-  # ── Round 2: Controller credentials ──────────────────────────────────────
-  echo "Round 2: Re-adopting with controller credentials (for switches that rebooted)..."
-  local r2_sent=0
-  for ip in "${adopt_ips[@]}"; do
-    local r2="failed"
-    if _adopt_ssh "$ssh_user" "$ssh_pass" "$ip"; then
-      r2="adopted"
-      r2_sent=$(( r2_sent + 1 ))
+  while IFS= read -r ip; do
+    [[ -z "$ip" ]] && continue
+    local result="failed"
+    if sshpass -p "$ssh_pass" ssh \
+        -o StrictHostKeyChecking=no \
+        -o ConnectTimeout=5 \
+        -o UserKnownHostsFile=/dev/null \
+        -o LogLevel=ERROR \
+        "${ssh_user}@${ip}" \
+        "mca-cli-op set-inform $inform_url" 2>/dev/null; then
+      result="adopted"
+      adopted=$(( adopted + 1 ))
       printf "  ${green}[OK]${reset} %-18s  set-inform sent\n" "$ip"
     else
-      printf "  ${yellow}[--]${reset} %-18s  no response\n" "$ip"
+      failed=$(( failed + 1 ))
+      printf "  ${yellow}[--]${reset} %-18s  could not connect\n" "$ip"
     fi
-    echo "r2:$ip:$r2" >> "$tmp_results"
-  done
-  echo "  Round 2 complete — $r2_sent set-inform(s) sent."
-  echo
-
-  # ── Round 3: Post-firmware-update (optional) ─────────────────────────────
-  local r3_sent=0 do_r3
-  read -r -p "Did any switches just finish a firmware update? Run final round? [y/N]: " do_r3
-  echo
-  if [[ "$do_r3" =~ ^[Yy]$ ]]; then
-    echo "Round 3: Post-update re-adoption..."
-    for ip in "${adopt_ips[@]}"; do
-      local r3="failed"
-      if _adopt_ssh "$ssh_user" "$ssh_pass" "$ip"; then
-        r3="adopted"
-        r3_sent=$(( r3_sent + 1 ))
-        printf "  ${green}[OK]${reset} %-18s  set-inform sent\n" "$ip"
-      else
-        printf "  ${yellow}[--]${reset} %-18s  no response\n" "$ip"
-      fi
-      echo "r3:$ip:$r3" >> "$tmp_results"
-    done
-    echo "  Round 3 complete — $r3_sent set-inform(s) sent."
-    echo
-  else
-    for ip in "${adopt_ips[@]}"; do
-      echo "r3:$ip:no_run" >> "$tmp_results"
-    done
-  fi
-
-  # ── Build JSON output ─────────────────────────────────────────────────────
-  local devices_json="["
-  local first=true
-  for ip in "${adopt_ips[@]}"; do
-    local mac="unknown"
-    if [[ -f "$task18_json" ]]; then
-      mac="$(jq -r --arg ip "$ip" '.devices[]? | select(.ip==$ip) | .mac // "unknown"' "$task18_json" 2>/dev/null || echo "unknown")"
-    fi
-    local r1 r2 r3
-    r1="$(grep "^r1:${ip}:" "$tmp_results" 2>/dev/null | tail -1 | cut -d: -f3 || echo "failed")"
-    r2="$(grep "^r2:${ip}:" "$tmp_results" 2>/dev/null | tail -1 | cut -d: -f3 || echo "failed")"
-    r3="$(grep "^r3:${ip}:" "$tmp_results" 2>/dev/null | tail -1 | cut -d: -f3 || echo "no_run")"
     [[ "$first" == "true" ]] || devices_json+=","
-    devices_json+="{\"ip\":\"$ip\",\"mac\":\"$mac\",\"round1\":\"$r1\",\"round2\":\"$r2\",\"round3\":\"$r3\"}"
+    devices_json+="{\"ip\":\"$ip\",\"result\":\"$result\"}"
     first=false
-  done
+  done < "$tmp_scan"
+  rm -f "$tmp_scan"
   devices_json+="]"
-  rm -f "$tmp_results"
 
-  local total_sent=$(( r1_sent + r2_sent + r3_sent ))
-  local devices_attempted="${#adopt_ips[@]}"
+  echo
+  echo "=============================="
+  echo "  Devices found:   $found_count"
+  echo "  set-inform sent: $adopted"
+  echo "  Could not reach: $failed"
 
   jq -n \
     --arg controller "$controller_domain" \
     --arg inform_url "$inform_url" \
     --arg iface "$iface" \
-    --argjson devices_attempted "$devices_attempted" \
-    --argjson total_sent "$total_sent" \
+    --arg subnet "$subnet" \
+    --argjson devices_found "$found_count" \
+    --argjson devices_adopted "$adopted" \
     --argjson devices "$devices_json" \
     '{
       status: "success",
@@ -9735,48 +9630,47 @@ unifi_adoption() {
       controller: $controller,
       inform_url: $inform_url,
       interface: $iface,
-      devices_attempted: $devices_attempted,
-      set_informs_sent: $total_sent,
+      subnet: $subnet,
+      devices_found: $devices_found,
+      devices_adopted: $devices_adopted,
       devices: $devices
     }' > "$json_file"
-
-  echo "=============================="
-  echo "Adoption complete."
-  printf "  set-inform(s) sent: %s across %s device(s)\n" "$total_sent" "$devices_attempted"
 }
 
 render_unifi_adoption_report() {
   local file="$1"
   local report_file="$2"
-  local status controller inform_url devices_attempted set_informs_sent iface
 
+  local status controller inform_url iface subnet devices_found devices_adopted
   status="$(jq -r '.status // "success"' "$file" 2>/dev/null)"
   controller="$(jq -r '.controller // "unknown"' "$file" 2>/dev/null)"
   inform_url="$(jq -r '.inform_url // "unknown"' "$file" 2>/dev/null)"
   iface="$(jq -r '.interface // "unknown"' "$file" 2>/dev/null)"
-  devices_attempted="$(jq -r '.devices_attempted // 0' "$file" 2>/dev/null)"
-  set_informs_sent="$(jq -r '.set_informs_sent // 0' "$file" 2>/dev/null)"
+  subnet="$(jq -r '.subnet // "unknown"' "$file" 2>/dev/null)"
+  devices_found="$(jq -r '.devices_found // 0' "$file" 2>/dev/null)"
+  devices_adopted="$(jq -r '.devices_adopted // 0' "$file" 2>/dev/null)"
 
   {
-    echo "Status:             ${status:-unknown}"
-    echo "Interface:          ${iface}"
-    echo "Controller:         ${controller}"
-    echo "Inform URL:         ${inform_url}"
-    echo "Devices Attempted:  ${devices_attempted}"
-    echo "set-informs Sent:   ${set_informs_sent}"
+    echo "Status:           ${status:-unknown}"
+    echo "Interface:        ${iface}"
+    echo "Subnet Scanned:   ${subnet}"
+    echo "Controller:       ${controller}"
+    echo "Inform URL:       ${inform_url}"
+    echo "Devices Found:    ${devices_found}"
+    echo "set-inform Sent:  ${devices_adopted}"
     echo
 
     local dev_count
     dev_count="$(jq '.devices | length' "$file" 2>/dev/null || echo 0)"
     if [[ "$dev_count" -gt 0 ]]; then
-      printf "%-18s  %-20s  %-8s  %-8s  %s\n" "IP Address" "MAC Address" "Round 1" "Round 2" "Round 3"
-      printf "%-18s  %-20s  %-8s  %-8s  %s\n" "------------------" "--------------------" "--------" "--------" "--------"
-      jq -r '.devices[]? | [.ip, .mac, .round1, .round2, .round3] | @tsv' "$file" 2>/dev/null | \
-        while IFS=$'\t' read -r ip mac r1 r2 r3; do
-          printf "%-18s  %-20s  %-8s  %-8s  %s\n" "$ip" "$mac" "$r1" "$r2" "$r3"
+      printf "%-18s  %s\n" "IP Address" "Result"
+      printf "%-18s  %s\n" "------------------" "-------"
+      jq -r '.devices[]? | [.ip, .result] | @tsv' "$file" 2>/dev/null | \
+        while IFS=$'\t' read -r ip result; do
+          printf "%-18s  %s\n" "$ip" "$result"
         done
     else
-      echo "No adoption data recorded."
+      echo "No devices found."
     fi
   } >> "$report_file"
 }
