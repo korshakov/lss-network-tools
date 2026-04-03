@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.133"
+APP_VERSION="v1.2.134"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -4080,7 +4080,7 @@ vlan_trunk_scan() {
 
   tmp_pcap_tagged="$(mktemp /tmp/lss-vlan-tagged-XXXXXX.pcap)"
   tmp_pcap_cdp_lldp="$(mktemp /tmp/lss-vlan-cdp-XXXXXX.pcap)"
-  tmp_py="$(mktemp /tmp/lss-vlan-py-XXXXXX.py)"
+  tmp_py="$(mktemp /tmp/lss-vlan-py-XXXXXX)"
   tmp_raw_tagged="$(mktemp /tmp/lss-vlan-raw-tagged-XXXXXX.txt)"
   tmp_raw_cdp_lldp="$(mktemp /tmp/lss-vlan-raw-cdp-XXXXXX.txt)"
 
@@ -4393,7 +4393,7 @@ duplicate_ip_detection() {
   scan_output="$(arp-scan --interface="$iface" --localnet 2>/dev/null || true)"
   echo "$scan_output" > "$raw_file"
 
-  tmp_py="$(mktemp /tmp/lss-dupip-XXXXXX.py)"
+  tmp_py="$(mktemp /tmp/lss-dupip-XXXXXX)"
   cat > "$tmp_py" <<'PYEOF'
 import sys, json, re, collections
 
@@ -6295,7 +6295,7 @@ run_wireless_scan() {
   fi
 
   local tmp_py rc
-  tmp_py="$(mktemp /tmp/lss-wifi-scan-XXXXXX.py)"
+  tmp_py="$(mktemp /tmp/lss-wifi-scan-XXXXXX)"
   cat > "$tmp_py" <<'PYEOF'
 import sys, json, subprocess, re, os
 
@@ -7960,7 +7960,7 @@ dhcp_response_time() {
   echo "Probes:      $probe_count"
   echo "Sending DHCP Discover broadcasts and timing Offer responses..."
 
-  tmp_py="$(mktemp /tmp/lss-dhcp-rt-XXXXXX.py)"
+  tmp_py="$(mktemp /tmp/lss-dhcp-rt-XXXXXX)"
   cat > "$tmp_py" <<'PYEOF'
 import sys, json, time, random, socket, struct
 
@@ -9002,7 +9002,7 @@ unifi_device_scan() {
   tmp_lldp_py=""
   lldp_pid=""
   if python3 -c "import scapy" 2>/dev/null; then
-    tmp_lldp_py="$(mktemp /tmp/lss-unifi-lldp-XXXXXX.py)"
+    tmp_lldp_py="$(mktemp /tmp/lss-unifi-lldp-XXXXXX)"
     cat > "$tmp_lldp_py" << 'PYEOF'
 import sys, signal
 try:
@@ -9066,7 +9066,7 @@ PYEOF
   done
   # Deduplicate by IP, preferring entries that include a MAC
   local _tmp_dedup_py
-  _tmp_dedup_py="$(mktemp /tmp/lss-unifi-dedup-XXXXXX.py)"
+  _tmp_dedup_py="$(mktemp /tmp/lss-unifi-dedup-XXXXXX)"
   cat > "$_tmp_dedup_py" << 'PYEOF'
 import sys, socket, struct
 pairs = {}
@@ -9138,7 +9138,7 @@ PYEOF
   # a valid TLV payload are confirmed UniFi devices — they self-report their
   # MAC. Non-UniFi devices simply don't respond and are filtered out by OUI.
   local tmp_tlv_py
-  tmp_tlv_py="$(mktemp /tmp/lss-unifi-tlv-XXXXXX.py)"
+  tmp_tlv_py="$(mktemp /tmp/lss-unifi-tlv-XXXXXX)"
   cat > "$tmp_tlv_py" << 'PYEOF'
 import sys, socket, time, json
 
@@ -9827,7 +9827,7 @@ find_device_by_mac() {
 
   # Check 2: TLV probe on UDP 10001
   local _tmp_tlv_py
-  _tmp_tlv_py="$(mktemp /tmp/lss-findmac-tlv-XXXXXX.py)"
+  _tmp_tlv_py="$(mktemp /tmp/lss-findmac-tlv-XXXXXX)"
   cat > "$_tmp_tlv_py" << 'PYEOF'
 import sys, socket, time
 
