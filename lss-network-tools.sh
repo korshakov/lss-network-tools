@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.122"
+APP_VERSION="v1.2.123"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -2832,6 +2832,10 @@ print_install_hint() {
         echo "Missing required Python library: fpdf2"
         echo "Install with: pip3 install fpdf2"
         ;;
+      sshpass)
+        echo "Missing required tool: sshpass"
+        echo "Install with: brew install hudochenkov/sshpass/sshpass"
+        ;;
       *)
         echo "Missing required tool: $tool"
         echo "Install with: brew install $tool"
@@ -2840,7 +2844,7 @@ print_install_hint() {
   else
     echo "Missing required tool: $tool"
     case "$tool" in
-      iproute2|iputils-ping|tcpdump)
+      iproute2|iputils-ping|tcpdump|sshpass)
         echo "Install with: apt-get install $tool"
         ;;
       python3-scapy)
@@ -2923,6 +2927,18 @@ check_tools() {
     echo
     echo "Optional fallback missing: ifconfig"
     echo "Install with: apt install net-tools"
+  fi
+
+  echo
+  echo "Optional - Task 19 UniFi Adoption:"
+  if command -v sshpass >/dev/null 2>&1; then
+    printf "${green}[OK]${reset} sshpass\n"
+  else
+    if [[ "$OS" == "macos" ]]; then
+      printf "${yellow}[WARN]${reset} sshpass not found — Task 19 unavailable (install with: brew install hudochenkov/sshpass/sshpass)\n"
+    else
+      printf "${yellow}[WARN]${reset} sshpass not found — Task 19 unavailable (install with: apt install sshpass)\n"
+    fi
   fi
 
   echo
