@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.120"
+APP_VERSION="v1.2.121"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -9569,13 +9569,13 @@ unifi_adoption() {
   if [[ ! -f "$task18_json" ]]; then
     echo "No Task 18 scan found for this run."
     echo "Please run Task 18 (Scan For UniFi Devices) first, then re-run Task 19."
-    return 1
+    return 0
   fi
   local found_count
   found_count="$(jq -r '.devices_found // 0' "$task18_json" 2>/dev/null || echo 0)"
   if [[ "$found_count" -eq 0 ]]; then
     echo "Task 18 scan found no devices. Run Task 18 first."
-    return 1
+    return 0
   fi
   echo "Loaded $found_count device(s) from Task 18 scan."
   echo
