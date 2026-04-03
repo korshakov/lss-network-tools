@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.140"
+APP_VERSION="v1.2.141"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -9601,6 +9601,104 @@ PYEOF
   done < <(sort -u "$tmp_all_ips")
 
   rm -f "$tmp_nmap_ips" "$tmp_tlv_macs" "$tmp_tlv_ips" "$tmp_all_ips" "$tmp_live_ouis"
+
+  # ── Step 3b: Targeted TLV retry for OUI-confirmed devices without a model ──
+  # Adopted devices sometimes don't respond in the broad 15s window but will
+  # respond to a focused unicast probe once the subnet broadcast noise settles.
+  local _oui_no_model_ips=()
+  if [[ -n "$entries" ]]; then
+    while IFS=$'\t' read -r _ip _model; do
+      [[ -z "$_model" ]] && _oui_no_model_ips+=("$_ip")
+    done < <(printf '[%s]' "$entries" | jq -r '.[] | [.ip, (.model // "")] | @tsv' 2>/dev/null)
+  fi
+
+  if [[ "${#_oui_no_model_ips[@]}" -gt 0 ]]; then
+    local tmp_tlv_retry_py
+    tmp_tlv_retry_py="$(mktemp /tmp/lss-unifi-tlv-XXXXXX)"
+    cat > "$tmp_tlv_retry_py" << 'PYEOF'
+import sys, socket, time
+
+PROBE_V1 = b'\x01\x00\x00\x00'
+PROBE_V2 = b'\x02\x0a\x00\x04\x01\x00\x00\x01'
+
+def parse_tlv(data):
+    if len(data) < 4:
+        return None, None
+    mac = None
+    model = None
+    offset = 4
+    while offset + 3 <= len(data):
+        tlv_type = data[offset]
+        tlv_len  = data[offset+1] * 256 + data[offset+2]
+        if offset + 3 + tlv_len > len(data):
+            break
+        v = data[offset+3:offset+3+tlv_len]
+        offset += 3 + tlv_len
+        if tlv_type == 0x01 and len(v) == 6:
+            mac = '%02x:%02x:%02x:%02x:%02x:%02x' % tuple(v)
+        elif tlv_type == 0x02 and len(v) >= 10:
+            mac = '%02x:%02x:%02x:%02x:%02x:%02x' % tuple(v[:6])
+        elif tlv_type in (0x0b, 0x13):
+            try:
+                candidate = v.decode('utf-8', errors='replace').rstrip('\x00').strip()
+                if candidate and (model is None or tlv_type == 0x13):
+                    model = candidate
+            except Exception:
+                pass
+    return mac, model
+
+ips = sys.argv[1:]
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    sock.bind(('', 10001))
+except OSError:
+    sys.exit(0)
+
+confirmed = {}
+for _ in range(3):
+    remaining = [ip for ip in ips if ip not in confirmed]
+    for ip in remaining:
+        try:
+            sock.sendto(PROBE_V1, (ip, 10001))
+            sock.sendto(PROBE_V2, (ip, 10001))
+        except Exception:
+            pass
+    time.sleep(0.5)
+
+sock.settimeout(0.3)
+deadline = time.time() + 8
+while time.time() < deadline:
+    try:
+        data, addr = sock.recvfrom(2048)
+        src_ip = addr[0]
+        if src_ip in ips and src_ip not in confirmed:
+            mac, model = parse_tlv(data)
+            if mac and model:
+                confirmed[src_ip] = {'mac': mac, 'model': model}
+    except socket.timeout:
+        continue
+    except Exception:
+        continue
+
+sock.close()
+for ip, info in confirmed.items():
+    print(f'UNIFI_CONFIRMED|{ip}|{info["mac"]}|{info["model"]}')
+PYEOF
+    start_spinner_line "  Model lookup — probing ${#_oui_no_model_ips[@]} device(s)..."
+    local _tlv_retry_out
+    _tlv_retry_out="$(python3 "$tmp_tlv_retry_py" "${_oui_no_model_ips[@]}" 2>/dev/null || true)"
+    stop_spinner_line
+    rm -f "$tmp_tlv_retry_py"
+
+    while IFS='|' read -r _pfx _rip _rmac _rmodel; do
+      [[ -z "$_rip" || -z "$_rmodel" ]] && continue
+      entries="$(printf '[%s]' "$entries" | jq -c \
+        --arg ip "$_rip" --arg model "$_rmodel" \
+        '[.[] | if .ip == $ip then . + {model: $model} else . end]' 2>/dev/null \
+        | jq -r '.[] | tojson' | paste -sd, - || printf '%s' "$entries")"
+    done < <(printf '%s\n' "$_tlv_retry_out" | grep '^UNIFI_CONFIRMED|' || true)
+  fi
 
   # ── Step 4: SSH banner rescue for flagged devices ─────────────────────────
   # Devices that weren't confirmed by TLV and have an unknown OUI get an SSH
