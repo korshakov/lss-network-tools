@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.138"
+APP_VERSION="v1.2.139"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -2147,6 +2147,200 @@ view_results_for_run_dir() {
   done
 }
 
+compare_runs_cli() {
+  local run_dir_a="$1"
+  local label_a
+  label_a="$(run_dir_label "$run_dir_a")"
+
+  # Build list of other runs
+  local run_dirs=()
+  while IFS= read -r dir; do
+    [[ "$dir" == "$run_dir_a" ]] && continue
+    [[ -n "$dir" ]] && run_dirs+=("$dir")
+  done < <(list_all_run_dirs)
+
+  if [[ "${#run_dirs[@]}" -eq 0 ]]; then
+    echo "No other runs available to compare with."
+    return 0
+  fi
+
+  echo
+  echo "Compare with which run?"
+  echo
+  local idx
+  for idx in "${!run_dirs[@]}"; do
+    printf "  %2d) %s\n" "$(( idx + 1 ))" "$(run_dir_label "${run_dirs[$idx]}")"
+  done
+  echo "   0) Cancel"
+  echo
+  local choice
+  read -r -p "Choose: " choice
+  [[ "$choice" == "0" || -z "$choice" ]] && return 0
+  if ! [[ "$choice" =~ ^[0-9]+$ ]] || [[ "$choice" -lt 1 || "$choice" -gt "${#run_dirs[@]}" ]]; then
+    echo "Invalid selection."
+    return 0
+  fi
+
+  local run_dir_b="${run_dirs[$(( choice - 1 ))]}"
+  local label_b
+  label_b="$(run_dir_label "$run_dir_b")"
+
+  echo
+  echo "  A (this):   $label_a"
+  echo "  B (compare): $label_b"
+  echo
+  printf '%0.s─' {1..60}; echo
+
+  # ── Task 1: Interface / IP ──────────────────────────────────────────────────
+  local f1a="$run_dir_a/interface-network-info.json"
+  local f1b="$run_dir_b/interface-network-info.json"
+  if [[ -f "$f1a" && -f "$f1b" ]]; then
+    local ip_a gw_a ip_b gw_b
+    ip_a="$(jq -r '.ip_address // empty' "$f1a" 2>/dev/null)"
+    gw_a="$(jq -r '.gateway // empty' "$f1a" 2>/dev/null)"
+    ip_b="$(jq -r '.ip_address // empty' "$f1b" 2>/dev/null)"
+    gw_b="$(jq -r '.gateway // empty' "$f1b" 2>/dev/null)"
+    echo
+    echo "INTERFACE (Task 1)"
+    if [[ "$ip_a" != "$ip_b" ]]; then
+      echo "  IP:       $ip_b  →  $ip_a  (changed)"
+    else
+      echo "  IP:       $ip_a  (no change)"
+    fi
+    if [[ "$gw_a" != "$gw_b" ]]; then
+      echo "  Gateway:  $gw_b  →  $gw_a  (changed)"
+    else
+      echo "  Gateway:  $gw_a  (no change)"
+    fi
+  fi
+
+  # ── Task 2: Internet Speed ──────────────────────────────────────────────────
+  local f2a="$run_dir_a/internet-speed-test.json"
+  local f2b="$run_dir_b/internet-speed-test.json"
+  if [[ -f "$f2a" && -f "$f2b" ]]; then
+    local dl_a ul_a ping_a dl_b ul_b ping_b
+    dl_a="$(jq -r '.download_speed // empty' "$f2a" 2>/dev/null)"
+    ul_a="$(jq -r '.upload_speed // empty' "$f2a" 2>/dev/null)"
+    ping_a="$(jq -r '.ping_latency // empty' "$f2a" 2>/dev/null)"
+    dl_b="$(jq -r '.download_speed // empty' "$f2b" 2>/dev/null)"
+    ul_b="$(jq -r '.upload_speed // empty' "$f2b" 2>/dev/null)"
+    ping_b="$(jq -r '.ping_latency // empty' "$f2b" 2>/dev/null)"
+    echo
+    echo "INTERNET SPEED (Task 2)"
+    python3 -c "
+def fmt(b, a, unit, higher_better=True):
+    try:
+        b, a = float(b), float(a)
+        diff = a - b
+        pct = (diff / b * 100) if b else 0
+        arrow = ('↑' if diff > 0 else '↓') if diff != 0 else '='
+        better = (diff > 0) == higher_better
+        tag = ' (improved)' if better and diff != 0 else (' (worse)' if not better and diff != 0 else '')
+        print(f'  {arrow}  {b:.1f} {unit}  →  {a:.1f} {unit}  ({diff:+.1f}, {pct:+.1f}%){tag}')
+    except:
+        print(f'  {b} {unit}  →  {a} {unit}')
+print('  Download:'); fmt('$dl_b', '$dl_a', 'Mbps', True)
+print('  Upload:');   fmt('$ul_b', '$ul_a', 'Mbps', True)
+print('  Ping:');     fmt('$ping_b', '$ping_a', 'ms', False)
+" 2>/dev/null || true
+  fi
+
+  # ── Task 4: DHCP Servers ────────────────────────────────────────────────────
+  local f4a="$run_dir_a/dhcp-scan.json"
+  local f4b="$run_dir_b/dhcp-scan.json"
+  if [[ -f "$f4a" && -f "$f4b" ]]; then
+    echo
+    echo "DHCP SERVERS (Task 4)"
+    local servers_a servers_b
+    servers_a="$(jq -r '.servers[]?.ip // empty' "$f4a" 2>/dev/null | sort)"
+    servers_b="$(jq -r '.servers[]?.ip // empty' "$f4b" 2>/dev/null | sort)"
+    local added removed
+    added="$(comm -23 <(echo "$servers_a") <(echo "$servers_b") 2>/dev/null || true)"
+    removed="$(comm -13 <(echo "$servers_a") <(echo "$servers_b") 2>/dev/null || true)"
+    if [[ -z "$added" && -z "$removed" ]]; then
+      echo "  No change."
+    else
+      while IFS= read -r s; do [[ -n "$s" ]] && echo "  + $s  (new)"; done <<< "$added"
+      while IFS= read -r s; do [[ -n "$s" ]] && echo "  - $s  (gone)"; done <<< "$removed"
+    fi
+  fi
+
+  # ── Task 6: DNS Servers ─────────────────────────────────────────────────────
+  local f6a="$run_dir_a/dns-scan.json"
+  local f6b="$run_dir_b/dns-scan.json"
+  if [[ -f "$f6a" && -f "$f6b" ]]; then
+    echo
+    echo "DNS SERVERS (Task 6)"
+    local dns_a dns_b
+    dns_a="$(jq -r '.servers[]?.ip // empty' "$f6a" 2>/dev/null | sort)"
+    dns_b="$(jq -r '.servers[]?.ip // empty' "$f6b" 2>/dev/null | sort)"
+    local dns_added dns_removed
+    dns_added="$(comm -23 <(echo "$dns_a") <(echo "$dns_b") 2>/dev/null || true)"
+    dns_removed="$(comm -13 <(echo "$dns_a") <(echo "$dns_b") 2>/dev/null || true)"
+    if [[ -z "$dns_added" && -z "$dns_removed" ]]; then
+      echo "  No change."
+    else
+      while IFS= read -r s; do [[ -n "$s" ]] && echo "  + $s  (new)"; done <<< "$dns_added"
+      while IFS= read -r s; do [[ -n "$s" ]] && echo "  - $s  (gone)"; done <<< "$dns_removed"
+    fi
+  fi
+
+  # ── Task 12: Duplicate IPs ──────────────────────────────────────────────────
+  local f12a="$run_dir_a/duplicate-ip-scan.json"
+  local f12b="$run_dir_b/duplicate-ip-scan.json"
+  if [[ -f "$f12a" && -f "$f12b" ]]; then
+    local dup_a dup_b
+    dup_a="$(jq -r '.duplicate_count // 0' "$f12a" 2>/dev/null)"
+    dup_b="$(jq -r '.duplicate_count // 0' "$f12b" 2>/dev/null)"
+    echo
+    echo "DUPLICATE IPs (Task 12)"
+    if [[ "$dup_a" == "$dup_b" ]]; then
+      echo "  No change. ($dup_a duplicate(s))"
+    elif [[ "$dup_a" -gt "$dup_b" ]]; then
+      echo "  ↑ $dup_b → $dup_a duplicate(s)  (worse)"
+    else
+      echo "  ↓ $dup_b → $dup_a duplicate(s)  (improved)"
+    fi
+  fi
+
+  # ── Task 18: UniFi Devices ──────────────────────────────────────────────────
+  local f18a="$run_dir_a/unifi-discovery.json"
+  local f18b="$run_dir_b/unifi-discovery.json"
+  if [[ -f "$f18a" && -f "$f18b" ]]; then
+    echo
+    echo "UNIFI DEVICES (Task 18)"
+    local macs_a macs_b
+    macs_a="$(jq -r '.devices[]?.mac // empty' "$f18a" 2>/dev/null | sort)"
+    macs_b="$(jq -r '.devices[]?.mac // empty' "$f18b" 2>/dev/null | sort)"
+    local new_macs gone_macs
+    new_macs="$(comm -23 <(echo "$macs_a") <(echo "$macs_b") 2>/dev/null || true)"
+    gone_macs="$(comm -13 <(echo "$macs_a") <(echo "$macs_b") 2>/dev/null || true)"
+    if [[ -z "$new_macs" && -z "$gone_macs" ]]; then
+      echo "  No change."
+    else
+      while IFS= read -r m; do
+        [[ -z "$m" ]] && continue
+        local ip model
+        ip="$(jq -r --arg m "$m" '.devices[]? | select(.mac==$m) | .ip' "$f18a" 2>/dev/null)"
+        model="$(jq -r --arg m "$m" '.devices[]? | select(.mac==$m) | .model // ""' "$f18a" 2>/dev/null)"
+        echo "  + $m  ${ip:+($ip)  }${model:+$model  }(new)"
+      done <<< "$new_macs"
+      while IFS= read -r m; do
+        [[ -z "$m" ]] && continue
+        local ip model
+        ip="$(jq -r --arg m "$m" '.devices[]? | select(.mac==$m) | .ip' "$f18b" 2>/dev/null)"
+        model="$(jq -r --arg m "$m" '.devices[]? | select(.mac==$m) | .model // ""' "$f18b" 2>/dev/null)"
+        echo "  - $m  ${ip:+($ip)  }${model:+$model  }(gone)"
+      done <<< "$gone_macs"
+    fi
+  fi
+
+  echo
+  printf '%0.s─' {1..60}; echo
+  echo
+  read -r -p "Press Enter to continue..." _
+}
+
 run_action_submenu() {
   local run_dir="$1"
   local label=""
@@ -2164,6 +2358,7 @@ run_action_submenu() {
     echo "2) Delete This Run"
     echo "3) View Results"
     echo "4) Continue This Run"
+    echo "5) Compare This Run"
     echo "00) Back to Main Menu"
     echo "0) Back"
     echo
@@ -2193,6 +2388,9 @@ run_action_submenu() {
       4)
         continue_run_from_dir "$run_dir" || true
         [[ "${_GOTO_MAIN_MENU:-false}" == "true" ]] && return 0
+        ;;
+      5)
+        compare_runs_cli "$run_dir" || true
         ;;
       *) echo "Invalid selection. Try again."; sleep 1 ;;
     esac
@@ -3948,12 +4146,90 @@ scan_servers_by_ports() {
 }
 
 
+enrich_dns_resolution() {
+  local json_file="$1"
+  local dns_ips=()
+  local ip
+  while IFS= read -r ip; do
+    [[ -n "$ip" ]] && dns_ips+=("$ip")
+  done < <(jq -r '.servers[]?.ip // empty' "$json_file" 2>/dev/null)
+
+  [[ "${#dns_ips[@]}" -eq 0 ]] && return 0
+
+  echo "Resolution test (google.com):"
+  local tmp_py
+  tmp_py="$(mktemp /tmp/lss-dns-test-XXXXXX)"
+  cat > "$tmp_py" << 'PYEOF'
+import sys, socket, time, struct, random, json
+
+def dns_query(server_ip, domain, timeout=3):
+    txid = random.randint(0, 65535)
+    header = struct.pack('!HHHHHH', txid, 0x0100, 1, 0, 0, 0)
+    question = b''
+    for label in domain.split('.'):
+        e = label.encode()
+        question += bytes([len(e)]) + e
+    question += b'\x00' + struct.pack('!HH', 1, 1)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(timeout)
+    try:
+        start = time.time()
+        sock.sendto(header + question, (server_ip, 53))
+        data, _ = sock.recvfrom(512)
+        elapsed = round((time.time() - start) * 1000, 1)
+        rcode = struct.unpack('!H', data[2:4])[0] & 0x000F
+        ancount = struct.unpack('!H', data[6:8])[0]
+        return (rcode == 0 and ancount > 0), elapsed
+    except Exception:
+        return False, None
+    finally:
+        sock.close()
+
+results = []
+for ip in sys.argv[1:]:
+    resolved, ms = dns_query(ip, 'google.com')
+    results.append({'ip': ip, 'resolved': resolved, 'response_ms': ms})
+print(json.dumps(results))
+PYEOF
+
+  local result_json
+  result_json="$(python3 "$tmp_py" "${dns_ips[@]}" 2>/dev/null || echo '[]')"
+  rm -f "$tmp_py"
+
+  local idx=0
+  for ip in "${dns_ips[@]}"; do
+    local resolved ms
+    resolved="$(printf '%s' "$result_json" | jq -r ".[$idx].resolved // false" 2>/dev/null)"
+    ms="$(printf '%s' "$result_json" | jq -r ".[$idx].response_ms // \"null\"" 2>/dev/null)"
+    if [[ "$resolved" == "true" ]]; then
+      printf "  %-16s  OK  (%s ms)\n" "$ip" "$ms"
+    else
+      printf "  %-16s  FAILED\n" "$ip"
+    fi
+    local ms_json="null"
+    [[ "$ms" != "null" && -n "$ms" ]] && ms_json="$ms"
+    jq \
+      --arg ip "$ip" \
+      --argjson resolved "$([ "$resolved" == "true" ] && echo true || echo false)" \
+      --argjson ms "$ms_json" \
+      '(.servers[] | select(.ip == $ip)) += {resolution_test: {domain: "google.com", resolved: $resolved, response_ms: $ms}}' \
+      "$json_file" > "$json_file.tmp" 2>/dev/null && mv "$json_file.tmp" "$json_file" || true
+    idx=$(( idx + 1 ))
+  done
+  echo
+}
+
 detect_dns_servers() {
   scan_servers_by_ports \
     "DNS Network Scan" \
     "DNS" \
     "53" \
     "dns-scan.json"
+  local json_file
+  json_file="$(task_output_path 6 2>/dev/null || true)"
+  if json_file_usable "$json_file"; then
+    enrich_dns_resolution "$json_file"
+  fi
 }
 
 detect_ldap_servers() {
@@ -8833,7 +9109,15 @@ render_generic_network_scan_report() {
     echo "Servers Found: $server_count"
   } >> "$report_file"
 
-  jq -r --arg lbl "$label" '.servers[]? | "- \($lbl) Host \(.ip) | Open Ports: \((.open_ports // []) | if length > 0 then map(tostring) | join(", ") else "none found" end) | Services: \((.detected_services // []) | if length > 0 then join(", ") else "unknown" end)"' "$file" >> "$report_file"
+  if [[ "$label" == "DNS" ]]; then
+    jq -r '.servers[]? |
+      "- DNS Host \(.ip) | Ports: \((.open_ports // []) | map(tostring) | join(", ")) | google.com: \(
+        if .resolution_test then
+          (if .resolution_test.resolved then "OK (" + ((.resolution_test.response_ms // "?") | tostring) + " ms)" else "FAILED" end)
+        else "not tested" end)"' "$file" >> "$report_file"
+  else
+    jq -r --arg lbl "$label" '.servers[]? | "- \($lbl) Host \(.ip) | Open Ports: \((.open_ports // []) | if length > 0 then map(tostring) | join(", ") else "none found" end) | Services: \((.detected_services // []) | if length > 0 then join(", ") else "unknown" end)"' "$file" >> "$report_file"
+  fi
 }
 
 
@@ -9148,8 +9432,9 @@ PROBE_V2 = b'\x02\x0a\x00\x04\x01\x00\x00\x01'
 
 def parse_tlv(data):
     if len(data) < 4:
-        return None
+        return None, None
     mac = None
+    model = None
     offset = 4  # skip 4-byte header
     while offset + 3 <= len(data):
         tlv_type = data[offset]
@@ -9162,7 +9447,15 @@ def parse_tlv(data):
             mac = '%02x:%02x:%02x:%02x:%02x:%02x' % tuple(v)
         elif tlv_type == 0x02 and len(v) >= 10:
             mac = '%02x:%02x:%02x:%02x:%02x:%02x' % tuple(v[:6])
-    return mac
+        elif tlv_type in (0x0b, 0x13):
+            # 0x0b = hostname/model on older firmware; 0x13 = short model name (e.g. "U7Pro")
+            try:
+                candidate = v.decode('utf-8', errors='replace').rstrip('\x00').strip()
+                if candidate and (model is None or tlv_type == 0x13):
+                    model = candidate
+            except Exception:
+                pass
+    return mac, model
 
 # argv: [bcast_addr, ip1, ip2, ...]
 args     = sys.argv[1:]
@@ -9210,9 +9503,9 @@ while time.time() < deadline:
         data, addr = sock.recvfrom(2048)
         src_ip = addr[0]
         if src_ip not in confirmed:
-            mac = parse_tlv(data)
+            mac, model = parse_tlv(data)
             if mac:
-                confirmed[src_ip] = mac
+                confirmed[src_ip] = {'mac': mac, 'model': model or ''}
     except socket.timeout:
         continue
     except Exception:
@@ -9220,8 +9513,8 @@ while time.time() < deadline:
 
 sock.close()
 
-for ip, mac in confirmed.items():
-    print(f'UNIFI_CONFIRMED ip={ip} mac={mac}')
+for ip, info in confirmed.items():
+    print(f'UNIFI_CONFIRMED|{ip}|{info["mac"]}|{info.get("model","")}')
 PYEOF
 
   echo "Step 2: TLV fingerprinting — probing $discovered_count host(s) (5 rounds, 15s window)..."
@@ -9231,17 +9524,14 @@ PYEOF
   stop_spinner_line
   rm -f "$tmp_tlv_py"
 
-  while IFS= read -r line; do
-    local nip nmac
-    nip="$(printf '%s' "$line"  | sed 's/.*ip=\([^ ]*\).*/\1/')"
-    nmac="$(printf '%s' "$line" | sed 's/.*mac=\([^ ]*\).*/\1/')"
+  while IFS='|' read -r _pfx nip nmac nmodel; do
     if [[ -n "$nip" && -n "$nmac" ]]; then
-      echo "  Confirmed: $nip  mac=$nmac"
-      printf '%s\t%s\n' "$nip" "$nmac" >> "$tmp_tlv_macs"
+      echo "  Confirmed: $nip  mac=$nmac${nmodel:+  model=$nmodel}"
+      printf '%s\t%s\t%s\n' "$nip" "$nmac" "$nmodel" >> "$tmp_tlv_macs"
       printf '%s\n' "$nip" >> "$tmp_tlv_ips"
       tlv_confirmed=$(( tlv_confirmed + 1 ))
     fi
-  done < <(printf '%s\n' "$tlv_out" | grep '^UNIFI_CONFIRMED ' || true)
+  done < <(printf '%s\n' "$tlv_out" | grep '^UNIFI_CONFIRMED|' || true)
   echo "  TLV complete — $tlv_confirmed confirmed UniFi device(s)."
   echo
 
@@ -9284,8 +9574,9 @@ PYEOF
 
   while IFS= read -r ip; do
     [[ -z "$ip" ]] && continue
-    local mac=""
-    mac="$(awk -v ip="$ip" '$1==ip{print $2; exit}' "$tmp_tlv_macs" 2>/dev/null || true)"
+    local mac="" model=""
+    mac="$(awk -v ip="$ip" -F'\t' '$1==ip{print $2; exit}' "$tmp_tlv_macs" 2>/dev/null || true)"
+    model="$(awk -v ip="$ip" -F'\t' '$1==ip{print $3; exit}' "$tmp_tlv_macs" 2>/dev/null || true)"
     if [[ -z "$mac" ]]; then
       # Use nmap-parsed MACs first (not subject to kernel ARP cache expiry)
       mac="$(awk -v ip="$ip" 'NF>=2 && $1==ip{print $2; exit}' "$tmp_arp_macs" 2>/dev/null || true)"
@@ -9300,7 +9591,7 @@ PYEOF
     [[ "$mac" != "unknown" ]] && is_ubiquiti_oui "$mac" && oui_match=true
 
     if [[ "$tlv_confirmed" == "true" ]] || [[ "$oui_match" == "true" ]]; then
-      entries="${entries:+$entries,}{\"mac\":\"$mac\",\"ip\":\"$ip\"}"
+      entries="${entries:+$entries,}{\"mac\":\"$mac\",\"ip\":\"$ip\"${model:+,\"model\":\"$model\"}}"
     else
       flagged_entries="${flagged_entries:+$flagged_entries,}{\"mac\":\"$mac\",\"ip\":\"$ip\"}"
     fi
@@ -9408,9 +9699,9 @@ finally:
     if [[ "$unifi_count" -gt 0 ]]; then
       echo "Found $unifi_count UniFi device(s):"
       echo
-      printf "%-20s  %s\n" "MAC Address" "IP Address"
-      printf "%-20s  %s\n" "--------------------" "---------------"
-      printf '[%s]' "$entries" | jq -r '.[] | [.mac, .ip] | @tsv' 2>/dev/null | \
+      printf "%-20s  %-15s  %s\n" "MAC Address" "IP Address" "Model"
+      printf "%-20s  %-15s  %s\n" "--------------------" "---------------" "----------------"
+      printf '[%s]' "$entries" | jq -r '.[] | [.mac, .ip, (.model // "")] | @tsv' 2>/dev/null | \
         python3 -c "
 import sys, socket, struct
 lines = sys.stdin.readlines()
@@ -9420,8 +9711,8 @@ def ip_key(l):
 lines.sort(key=ip_key)
 sys.stdout.writelines(lines)
 " | \
-        while IFS=$'\t' read -r mac ip; do
-          printf "%-20s  %s\n" "$mac" "$ip"
+        while IFS=$'\t' read -r mac ip model; do
+          printf "%-20s  %-15s  %s\n" "$mac" "$ip" "${model:---}"
         done
     fi
     if [[ "$flagged_count" -gt 0 ]]; then
@@ -9467,11 +9758,11 @@ render_unifi_discovery_report() {
     echo "Devices Found:  ${devices_found}"
     echo
     if [[ "$devices_found" -gt 0 ]]; then
-      printf "%-20s  %s\n" "MAC Address" "IP Address"
-      printf "%-20s  %s\n" "--------------------" "---------------"
-      jq -r '.devices[]? | [.mac, .ip] | @tsv' "$file" 2>/dev/null | \
-        while IFS=$'\t' read -r mac ip; do
-          printf "%-20s  %s\n" "$mac" "$ip"
+      printf "%-20s  %-15s  %s\n" "MAC Address" "IP Address" "Model"
+      printf "%-20s  %-15s  %s\n" "--------------------" "---------------" "----------------"
+      jq -r '.devices[]? | [.mac, .ip, (.model // "")] | @tsv' "$file" 2>/dev/null | \
+        while IFS=$'\t' read -r mac ip model; do
+          printf "%-20s  %-15s  %s\n" "$mac" "$ip" "${model:---}"
         done
     else
       echo "No UniFi devices found."
