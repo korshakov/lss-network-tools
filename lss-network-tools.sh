@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.109"
+APP_VERSION="v1.2.110"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -8962,6 +8962,48 @@ unifi_device_scan() {
     printf '%s' "$mac"
   }
 
+  # ── LLDP passive listener (background) ───────────────────────────────────
+  # Started immediately so it captures the full duration of Steps 1–4.
+  # UniFi switches broadcast LLDP every 30s — any online switch will appear
+  # here without being actively probed. Source MAC from each LLDP frame is
+  # written to a temp file and reconciled in Step 5.
+  local tmp_lldp_macs tmp_lldp_py lldp_pid
+  tmp_lldp_macs="$(mktemp /tmp/lss-unifi-lldp-XXXXXX)"
+  tmp_lldp_py=""
+  lldp_pid=""
+  if python3 -c "import scapy" 2>/dev/null; then
+    tmp_lldp_py="$(mktemp /tmp/lss-unifi-lldp-XXXXXX.py)"
+    cat > "$tmp_lldp_py" << 'PYEOF'
+import sys, signal
+try:
+    from scapy.all import sniff, Ether, conf
+    conf.verb = 0
+except ImportError:
+    sys.exit(0)
+iface   = sys.argv[1]
+outfile = sys.argv[2]
+seen    = set()
+def handle(pkt):
+    try:
+        mac = pkt[Ether].src.lower()
+        if mac not in seen:
+            seen.add(mac)
+            with open(outfile, 'a') as f:
+                f.write(mac + '\n')
+    except Exception:
+        pass
+def _stop(sig, frame):
+    sys.exit(0)
+signal.signal(signal.SIGTERM, _stop)
+signal.signal(signal.SIGINT,  _stop)
+sniff(iface=iface, filter='ether proto 0x88cc', prn=handle, store=0, timeout=600)
+PYEOF
+    python3 "$tmp_lldp_py" "$iface" "$tmp_lldp_macs" 2>/dev/null &
+    lldp_pid=$!
+    echo "LLDP:          passive listener active."
+    echo
+  fi
+
   # ── Step 1: ARP host discovery ────────────────────────────────────────────
   # ARP operates at layer 2 — every live device on the subnet MUST respond.
   # It cannot be filtered or rate-limited the way UDP probes can, making it
@@ -9189,7 +9231,7 @@ PYEOF
     fi
   done < <(sort -u "$tmp_all_ips")
 
-  rm -f "$tmp_nmap_ips" "$tmp_tlv_macs" "$tmp_tlv_ips" "$tmp_all_ips" "$tmp_live_ouis" "$tmp_arp_macs"
+  rm -f "$tmp_nmap_ips" "$tmp_tlv_macs" "$tmp_tlv_ips" "$tmp_all_ips" "$tmp_live_ouis"
 
   # ── Step 4: SSH banner rescue for flagged devices ─────────────────────────
   # Devices that weren't confirmed by TLV and have an unknown OUI get an SSH
@@ -9220,6 +9262,41 @@ PYEOF
     flagged_entries="$remaining_flagged"
     echo
   fi
+
+  # ── Step 5: LLDP reconciliation ───────────────────────────────────────────
+  # Stop the passive listener and cross-reference any Ubiquiti MACs it heard
+  # against the ARP-discovered IP table. Adds devices missed by TLV and OUI.
+  if [[ -n "$lldp_pid" ]]; then
+    kill "$lldp_pid" 2>/dev/null || true
+    wait "$lldp_pid" 2>/dev/null || true
+    rm -f "$tmp_lldp_py"
+    local lldp_new=0
+    if [[ -s "$tmp_lldp_macs" ]]; then
+      while IFS= read -r lldp_mac; do
+        [[ -z "$lldp_mac" ]] && continue
+        is_ubiquiti_oui "$lldp_mac" || continue
+        local lldp_ip
+        lldp_ip="$(awk -v m="$lldp_mac" 'NF>=2 && $2==m{print $1; exit}' "$tmp_arp_macs" 2>/dev/null || true)"
+        [[ -z "$lldp_ip" ]] && continue
+        # Already confirmed — skip
+        printf '%s' "$entries" | grep -q "\"ip\":\"$lldp_ip\"" && continue
+        # Remove from flagged if it landed there
+        if printf '%s' "$flagged_entries" | grep -q "\"ip\":\"$lldp_ip\""; then
+          flagged_entries="$(printf '[%s]' "$flagged_entries" | \
+            jq -c --arg ip "$lldp_ip" '[.[] | select(.ip != $ip)] | .[]' 2>/dev/null \
+            | paste -sd, - || printf '%s' "$flagged_entries")"
+        fi
+        echo "  LLDP: $lldp_ip  mac=$lldp_mac"
+        entries="${entries:+$entries,}{\"mac\":\"$lldp_mac\",\"ip\":\"$lldp_ip\"}"
+        lldp_new=$(( lldp_new + 1 ))
+      done < "$tmp_lldp_macs"
+      if [[ "$lldp_new" -gt 0 ]]; then
+        echo "  LLDP complete — $lldp_new additional device(s) confirmed."
+        echo
+      fi
+    fi
+  fi
+  rm -f "$tmp_lldp_macs" "$tmp_arp_macs"
 
   local unifi_count
   unifi_count="$(printf '%s' "$entries" | grep -o '"mac"' | wc -l | tr -d ' ')"
