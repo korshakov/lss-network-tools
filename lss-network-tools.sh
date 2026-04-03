@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.103"
+APP_VERSION="v1.2.104"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -5354,7 +5354,7 @@ custom_target_port_scan() {
     done
   fi
   echo
-  echo "Stage 1: Scanning all open ports on target (this may take up to 1 minute)..."
+  echo "Stage 1: Scanning all open ports on target (this may take up to 10 minutes)..."
 
   scan_file="$(mktemp)"
   entry_index="$(next_multi_entry_index 13)"
@@ -5374,9 +5374,9 @@ custom_target_port_scan() {
     echo "Error: Unable to create a temporary file for the custom port scan."
     return 1
   fi
-  nmap -p- --open -T4 "$target_ip" -oG - > "$scan_file" 2>/dev/null &
+  nmap -p- --open -T4 --min-rate 1000 "$target_ip" -oG - > "$scan_file" 2>/dev/null &
   local scan_pid=$!
-  monitor_nmap_progress "$scan_pid" "$scan_file" 120 "ports" "Open Ports:" "Custom target port scan failed for $target_ip." || {
+  monitor_nmap_progress "$scan_pid" "$scan_file" 600 "ports" "Open Ports:" "Custom target port scan failed for $target_ip." || {
     jq -n \
       --arg status "failed" \
       --argjson success false \
