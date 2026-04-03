@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.95"
+APP_VERSION="v1.2.96"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -9028,10 +9028,28 @@ PYEOF
   echo "  TLV complete — $tlv_confirmed confirmed UniFi device(s)."
   echo
 
+  # ── Helper: Ubiquiti OUI fallback ────────────────────────────────────────
+  # TLV is the primary confirmation method. OUI is the fallback for devices
+  # that have UDP 10001 open but don't respond to probes (e.g. USG/UDM
+  # firewalls and some switches). If either confirms it, it's a UniFi device.
+  is_ubiquiti_oui() {
+    local mac
+    mac="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+    local oui="${mac:0:8}"
+    case "$oui" in
+      00:15:6d|00:27:22|04:18:d6|0c:80:63|0c:ea:14|18:e8:29|1c:6a:1b) return 0 ;;
+      24:5a:4c|24:a4:3c|28:70:4e|2c:be:08|44:d9:e7|60:22:32) return 0 ;;
+      68:72:51|68:d7:9a|74:ac:b9|78:45:58|78:8a:20|80:2a:a8) return 0 ;;
+      9c:05:d6|ac:8b:a9|b4:fb:e4|d8:b3:70|dc:9f:db|e0:63:da) return 0 ;;
+      e4:38:83|f4:e2:c6|fc:ec:da|60:22:32|a8:9c:ed) return 0 ;;
+    esac
+    return 1
+  }
+
   # ── Step 3: build device list ─────────────────────────────────────────────
-  # Confirmed by TLV = UniFi device (MAC comes from the device itself).
-  # Found by nmap but no TLV response = flagged as possible false positive.
-  # No OUI database — the protocol response is the only proof needed.
+  # TLV confirmed = definite UniFi device.
+  # TLV not confirmed but Ubiquiti OUI = likely UniFi (firewall/switch that
+  # doesn't answer discovery probes). Flag everything else.
   local flagged_entries=""
   local tmp_all_ips
   tmp_all_ips="$(mktemp /tmp/lss-unifi-all-XXXXXX)"
@@ -9045,7 +9063,12 @@ PYEOF
       mac="$(arp_mac_for_ip "$ip")"
       [[ -z "$mac" ]] && mac="unknown"
     fi
-    if grep -qFx "$ip" "$tmp_tlv_ips" 2>/dev/null; then
+    local tlv_confirmed=false
+    grep -qFx "$ip" "$tmp_tlv_ips" 2>/dev/null && tlv_confirmed=true
+    local oui_match=false
+    [[ "$mac" != "unknown" ]] && is_ubiquiti_oui "$mac" && oui_match=true
+
+    if [[ "$tlv_confirmed" == "true" ]] || [[ "$oui_match" == "true" ]]; then
       entries="${entries:+$entries,}{\"mac\":\"$mac\",\"ip\":\"$ip\"}"
     else
       flagged_entries="${flagged_entries:+$flagged_entries,}{\"mac\":\"$mac\",\"ip\":\"$ip\"}"
