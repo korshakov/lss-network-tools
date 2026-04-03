@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.91"
+APP_VERSION="v1.2.92"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -8956,7 +8956,7 @@ unifi_device_scan() {
     # Known Ubiquiti OUIs only — locally administered MACs are NOT treated as
     # Ubiquiti because MAC randomization (phones, laptops) also sets that bit.
     case "$oui" in
-      00:15:6d|00:27:22|04:18:d6|0c:80:63|18:e8:29|1c:6a:1b) return 0 ;;
+      00:15:6d|00:27:22|04:18:d6|0c:80:63|0c:ea:14|18:e8:29|1c:6a:1b) return 0 ;;
       24:5a:4c|24:a4:3c|28:70:4e|2c:be:08|44:d9:e7|60:22:32) return 0 ;;
       68:72:51|68:d7:9a|74:ac:b9|78:45:58|78:8a:20|80:2a:a8) return 0 ;;
       9c:05:d6|ac:8b:a9|b4:fb:e4|d8:b3:70|dc:9f:db|e0:63:da) return 0 ;;
