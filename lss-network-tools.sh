@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.119"
+APP_VERSION="v1.2.120"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -9563,6 +9563,23 @@ unifi_adoption() {
     echo
   fi
 
+  # ── Load devices from Task 18 ─────────────────────────────────────────────
+  local task18_json
+  task18_json="$(task_output_path 18)"
+  if [[ ! -f "$task18_json" ]]; then
+    echo "No Task 18 scan found for this run."
+    echo "Please run Task 18 (Scan For UniFi Devices) first, then re-run Task 19."
+    return 1
+  fi
+  local found_count
+  found_count="$(jq -r '.devices_found // 0' "$task18_json" 2>/dev/null || echo 0)"
+  if [[ "$found_count" -eq 0 ]]; then
+    echo "Task 18 scan found no devices. Run Task 18 first."
+    return 1
+  fi
+  echo "Loaded $found_count device(s) from Task 18 scan."
+  echo
+
   # ── Step 1: Ask for controller domain and credentials ─────────────────────
   local controller_domain controller_port use_https inform_url ssh_user ssh_pass
   read -r -p "Controller domain or IP: " controller_domain
@@ -9586,35 +9603,7 @@ unifi_adoption() {
   echo "Inform URL:  $inform_url"
   echo
 
-  # ── Step 2: Scan for UniFi devices via UDP 10001 ─────────────────────────
-  local subnet
-  subnet="$(get_interface_network_cidr "$iface" 2>/dev/null || true)"
-  if [[ -z "$subnet" ]]; then
-    echo "Could not determine subnet for $iface."
-    return 1
-  fi
-
-  echo "Scanning $subnet for UniFi devices on UDP 10001..."
-  local tmp_scan
-  tmp_scan="$(mktemp /tmp/lss-unifi-adopt-scan-XXXXXX)"
-  nmap -n -sU -p 10001 --max-rate 300 --host-timeout 15s "$subnet" -oG - 2>/dev/null \
-    | awk '/10001\/open/{print $2}' | sort -u > "$tmp_scan"
-
-  local found_count
-  found_count="$(wc -l < "$tmp_scan" | tr -d ' ')"
-  echo "  $found_count device(s) found."
-  echo
-
-  if [[ "$found_count" -eq 0 ]]; then
-    echo "No devices found to adopt."
-    rm -f "$tmp_scan"
-    jq -n --arg iface "$iface" --arg subnet "$subnet" --arg inform_url "$inform_url" --arg controller "$controller_domain" \
-      '{status:"success",success:true,controller:$controller,inform_url:$inform_url,interface:$iface,subnet:$subnet,devices_found:0,devices_adopted:0,devices:[]}' \
-      > "$json_file"
-    return 0
-  fi
-
-  # ── Step 3: SSH into each device and send set-inform ─────────────────────
+  # ── Step 2: SSH into each device and send set-inform ─────────────────────
   echo "Attempting adoption..."
   local devices_json="[" first=true adopted=0 failed=0
 
@@ -9638,21 +9627,19 @@ unifi_adoption() {
     [[ "$first" == "true" ]] || devices_json+=","
     devices_json+="{\"ip\":\"$ip\",\"result\":\"$result\"}"
     first=false
-  done < "$tmp_scan"
-  rm -f "$tmp_scan"
+  done < <(jq -r '.devices[].ip // empty' "$task18_json" 2>/dev/null)
   devices_json+="]"
 
   echo
   echo "=============================="
-  echo "  Devices found:   $found_count"
-  echo "  set-inform sent: $adopted"
-  echo "  Could not reach: $failed"
+  echo "  Devices attempted: $found_count"
+  echo "  set-inform sent:   $adopted"
+  echo "  Could not reach:   $failed"
 
   jq -n \
     --arg controller "$controller_domain" \
     --arg inform_url "$inform_url" \
     --arg iface "$iface" \
-    --arg subnet "$subnet" \
     --argjson devices_found "$found_count" \
     --argjson devices_adopted "$adopted" \
     --argjson devices "$devices_json" \
@@ -9662,7 +9649,6 @@ unifi_adoption() {
       controller: $controller,
       inform_url: $inform_url,
       interface: $iface,
-      subnet: $subnet,
       devices_found: $devices_found,
       devices_adopted: $devices_adopted,
       devices: $devices
@@ -9673,22 +9659,20 @@ render_unifi_adoption_report() {
   local file="$1"
   local report_file="$2"
 
-  local status controller inform_url iface subnet devices_found devices_adopted
+  local status controller inform_url iface devices_found devices_adopted
   status="$(jq -r '.status // "success"' "$file" 2>/dev/null)"
   controller="$(jq -r '.controller // "unknown"' "$file" 2>/dev/null)"
   inform_url="$(jq -r '.inform_url // "unknown"' "$file" 2>/dev/null)"
   iface="$(jq -r '.interface // "unknown"' "$file" 2>/dev/null)"
-  subnet="$(jq -r '.subnet // "unknown"' "$file" 2>/dev/null)"
   devices_found="$(jq -r '.devices_found // 0' "$file" 2>/dev/null)"
   devices_adopted="$(jq -r '.devices_adopted // 0' "$file" 2>/dev/null)"
 
   {
     echo "Status:           ${status:-unknown}"
     echo "Interface:        ${iface}"
-    echo "Subnet Scanned:   ${subnet}"
     echo "Controller:       ${controller}"
     echo "Inform URL:       ${inform_url}"
-    echo "Devices Found:    ${devices_found}"
+    echo "Devices Attempted:  ${devices_found}"
     echo "set-inform Sent:  ${devices_adopted}"
     echo
 
