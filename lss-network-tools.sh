@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.139"
+APP_VERSION="v1.2.140"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -4156,7 +4156,10 @@ enrich_dns_resolution() {
 
   [[ "${#dns_ips[@]}" -eq 0 ]] && return 0
 
-  echo "Resolution test (google.com):"
+  local bold='\033[1m'
+  local reset='\033[0m'
+  printf "${bold}Resolution test (google.com):${reset}\n"
+  echo
   local tmp_py
   tmp_py="$(mktemp /tmp/lss-dns-test-XXXXXX)"
   cat > "$tmp_py" << 'PYEOF'
@@ -4202,9 +4205,9 @@ PYEOF
     resolved="$(printf '%s' "$result_json" | jq -r ".[$idx].resolved // false" 2>/dev/null)"
     ms="$(printf '%s' "$result_json" | jq -r ".[$idx].response_ms // \"null\"" 2>/dev/null)"
     if [[ "$resolved" == "true" ]]; then
-      printf "  %-16s  OK  (%s ms)\n" "$ip" "$ms"
+      printf "  ${bold}%-16s${reset}  OK  (%s ms)\n" "$ip" "$ms"
     else
-      printf "  %-16s  FAILED\n" "$ip"
+      printf "  ${bold}%-16s${reset}  FAILED\n" "$ip"
     fi
     local ms_json="null"
     [[ "$ms" != "null" && -n "$ms" ]] && ms_json="$ms"
