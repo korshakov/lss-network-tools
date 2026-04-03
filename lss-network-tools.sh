@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.135"
+APP_VERSION="v1.2.136"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -9052,6 +9052,7 @@ PYEOF
   local _tmp_arp_raw
   _tmp_arp_raw="$(mktemp /tmp/lss-unifi-arpraw-XXXXXX)"
   for _arp_pass in 1 2 3 4 5; do
+    printf "\r%s  ARP pass %d/5..." "${TASK_OUTPUT_INDENT:-}" "$_arp_pass" >&2
     nmap -n -sn "$subnet" 2>/dev/null | awk '
       /^Nmap scan report for /{
         if (ip!="" && mac!="") print ip"\t"mac
@@ -9061,6 +9062,7 @@ PYEOF
       END{if (ip!="" && mac!="") print ip"\t"mac}
     ' >> "$_tmp_arp_raw"
   done
+  printf "\r\033[K" >&2
   # Deduplicate by IP, preferring entries that include a MAC
   local _tmp_dedup_py
   _tmp_dedup_py="$(mktemp /tmp/lss-unifi-dedup-XXXXXX)"
@@ -9097,6 +9099,7 @@ PYEOF
   _tmp_udp_raw="$(mktemp /tmp/lss-unifi-udp-XXXXXX)"
   _tmp_udp_confirmed="$(mktemp /tmp/lss-unifi-udp-confirmed-XXXXXX)"
   for _udp_pass in 1 2 3 4 5 6 7 8 9 10; do
+    printf "\r%s  UDP pass %d/10..." "${TASK_OUTPUT_INDENT:-}" "$_udp_pass" >&2
     # Build exclusion list: ARP hosts + already confirmed UDP responders
     local _excl
     _excl="$(cat "$tmp_nmap_ips" "$_tmp_udp_confirmed" 2>/dev/null | sort -u)"
@@ -9112,6 +9115,7 @@ PYEOF
       | awk '/10001\/open/{print $2}' | tee -a "$_tmp_udp_raw" >> "$_tmp_udp_confirmed"
     [[ "$_udp_pass" -lt 10 ]] && sleep 1
   done
+  printf "\r\033[K" >&2
   local udp_new=0
   while IFS= read -r udp_ip; do
     [[ -z "$udp_ip" ]] && continue
@@ -9222,7 +9226,9 @@ PYEOF
 
   echo "Step 2: TLV fingerprinting — probing $discovered_count host(s) (5 rounds, 15s window)..."
   local tlv_out tlv_confirmed=0
+  start_spinner_line "  Sending probes and waiting for responses..."
   tlv_out="$(python3 "$tmp_tlv_py" "$broadcast_addr" $(sort -u "$tmp_nmap_ips" | tr '\n' ' ') 2>/dev/null || true)"
+  stop_spinner_line
   rm -f "$tmp_tlv_py"
 
   while IFS= read -r line; do
@@ -9312,6 +9318,7 @@ PYEOF
     local remaining_flagged=""
     while IFS=$'\t' read -r mac ip; do
       [[ -z "$ip" ]] && continue
+      printf "\r%s  Checking %s..." "${TASK_OUTPUT_INDENT:-}" "$ip" >&2
       local banner
       banner="$(python3 -c "
 import socket, sys
@@ -9326,6 +9333,7 @@ except Exception:
 finally:
     s.close()
 " 2>/dev/null | head -1 | tr -d '\r\n')"
+      printf "\r\033[K" >&2
       if printf '%s' "$banner" | grep -qi 'dropbear'; then
         echo "  $ip — Ubiquiti SSH banner confirmed: $banner"
         rescued_entries="${rescued_entries:+$rescued_entries,}{\"mac\":\"$mac\",\"ip\":\"$ip\"}"
