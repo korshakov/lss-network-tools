@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.105"
+APP_VERSION="v1.2.106"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -8975,10 +8975,13 @@ unifi_device_scan() {
   tmp_tlv_macs="$(mktemp /tmp/lss-unifi-tlv-XXXXXX)"
   tmp_tlv_ips="$(mktemp /tmp/lss-unifi-tlvips-XXXXXX)"
 
-  echo "Step 1: ARP host discovery on $subnet..."
-  nmap -n -sn "$subnet" -oG - 2>/dev/null \
-    | awk '/Status: Up/{print $2}' \
-    | sort -u > "$tmp_nmap_ips"
+  echo "Step 1: ARP host discovery on $subnet (2 passes)..."
+  local _tmp_arp_pass
+  _tmp_arp_pass="$(mktemp /tmp/lss-unifi-arp-XXXXXX)"
+  nmap -n -sn "$subnet" -oG - 2>/dev/null | awk '/Status: Up/{print $2}' >> "$_tmp_arp_pass"
+  nmap -n -sn "$subnet" -oG - 2>/dev/null | awk '/Status: Up/{print $2}' >> "$_tmp_arp_pass"
+  sort -u "$_tmp_arp_pass" > "$tmp_nmap_ips"
+  rm -f "$_tmp_arp_pass"
   local discovered_count
   discovered_count="$(wc -l < "$tmp_nmap_ips" | tr -d ' ')"
   echo "  $discovered_count live host(s) found."
@@ -9161,6 +9164,10 @@ PYEOF
     local remaining_flagged=""
     while IFS=$'\t' read -r mac ip; do
       [[ -z "$ip" ]] && continue
+      # Skip devices without TCP 22 open — they are definitely not UniFi
+      if ! nc -z -w 1 "$ip" 22 2>/dev/null; then
+        continue
+      fi
       local banner
       banner="$(nc -w 2 "$ip" 22 2>/dev/null | head -1 | tr -d '\r\n')"
       if printf '%s' "$banner" | grep -qi 'dropbear'; then
