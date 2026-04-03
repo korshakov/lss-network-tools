@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.107"
+APP_VERSION="v1.2.108"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -8993,7 +8993,9 @@ unifi_device_scan() {
     ' >> "$_tmp_arp_raw"
   done
   # Deduplicate by IP, preferring entries that include a MAC
-  python3 - << 'PYEOF' < "$_tmp_arp_raw" > "$tmp_arp_macs"
+  local _tmp_dedup_py
+  _tmp_dedup_py="$(mktemp /tmp/lss-unifi-dedup-XXXXXX.py)"
+  cat > "$_tmp_dedup_py" << 'PYEOF'
 import sys, socket, struct
 pairs = {}
 for line in sys.stdin:
@@ -9008,6 +9010,8 @@ def ip_key(ip):
 for ip in sorted(pairs, key=ip_key):
     print(ip + '\t' + pairs[ip])
 PYEOF
+  python3 "$_tmp_dedup_py" < "$_tmp_arp_raw" > "$tmp_arp_macs"
+  rm -f "$_tmp_dedup_py"
   rm -f "$_tmp_arp_raw"
   awk -F'\t' '{print $1}' "$tmp_arp_macs" > "$tmp_nmap_ips"
   local discovered_count
