@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.115"
+APP_VERSION="v1.2.116"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -386,7 +386,7 @@ about_and_health() {
   echo
   echo "Dependencies"
   echo "------------"
-  tools_to_check=(nmap jq speedtest-cli tcpdump awk sed grep find mktemp python3)
+  tools_to_check=(nmap jq speedtest-cli tcpdump awk sed grep find mktemp python3 sshpass)
   if [[ "$OS" == "macos" ]]; then
     tools_to_check+=(ipconfig ifconfig route networksetup ping)
   else
@@ -532,6 +532,20 @@ about_and_health() {
     fi
   else
     printf "${yellow}[WARN]${reset} Ubiquiti OUI cache not yet created (will fetch on first UniFi scan)\n"
+  fi
+
+  echo
+  echo "Task 19 - UniFi Adoption"
+  echo "------------------------"
+  if command -v sshpass >/dev/null 2>&1; then
+    printf "${green}[OK]${reset} sshpass\n"
+  else
+    if [[ "$OS" == "macos" ]]; then
+      printf "${red}[MISSING]${reset} sshpass — install with: brew install hudochenkov/sshpass/sshpass\n"
+    else
+      printf "${red}[MISSING]${reset} sshpass — install with: sudo apt install sshpass\n"
+    fi
+    issues=$((issues + 1))
   fi
 
   echo
