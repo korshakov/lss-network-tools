@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.144"
+APP_VERSION="v1.2.145"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -2003,20 +2003,6 @@ continue_run_from_dir() {
       case "$_post_choice" in
         1) echo; break ;;
         2)
-          local build_now
-          read -r -p "Build report now? [y/N]: " build_now
-          if [[ "$build_now" =~ ^[Yy]$ ]]; then
-            local export_dir report_name
-            export_dir="$(default_report_export_dir)"
-            mkdir -p "$export_dir" 2>/dev/null || true
-            report_name="lss-network-tools-report-$(basename "$run_dir")-$(date '+%H-%M').txt"
-            RUN_REPORT_FILE="$export_dir/$report_name"
-            prompt_prepared_by
-            if build_report_for_current_run; then
-              echo "TXT report: $RUN_REPORT_FILE"
-              generate_pdf_report || true
-            fi
-          fi
           _restore_continue_state
           return 0
           ;;
