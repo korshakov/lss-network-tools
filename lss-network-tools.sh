@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.143"
+APP_VERSION="v1.2.144"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -1920,52 +1920,28 @@ continue_run_from_dir() {
   local green='\033[0;32m'
   local red='\033[0;31m'
   local reset='\033[0m'
-  local has_corrupt=0
-
-  echo
-  echo "Audit Task Status:"
-  echo
-
-  # Fix 5: show all tasks (1-17), Fix 3: three states — complete/corrupt/missing
-  for task_id in $(get_task_ids); do
-    title="$(task_title "$task_id")"
-    if [[ -n "$(task_json_files "$task_id")" ]]; then
-      printf "  ${green}[x]${reset} %s) %s\n" "$task_id" "$title"
-    elif task_has_corrupt_json "$task_id"; then
-      printf "  ${red}[!]${reset} %s) %s\n" "$task_id" "$title"
-      pending_ids+=("$task_id")
-      has_corrupt=1
-    else
-      printf "  [ ] %s) %s\n" "$task_id" "$title"
-      pending_ids+=("$task_id")
-    fi
-  done
-  echo
-
-  if [[ "$has_corrupt" -eq 1 ]]; then
-    printf "${red}[!] Corrupt or incomplete JSON detected — those tasks should be re-run.${reset}\n"
-    echo
-  fi
-
-  if [[ "${#pending_ids[@]}" -eq 0 ]]; then
-    echo "All tasks have completed for this run."
-    echo
-    read -r -p "Press Enter to continue..." _
-    _restore_continue_state
-    return 0
-  fi
 
   while true; do
-    # Refresh pending list on each loop iteration
+    # Refresh task status on each loop iteration
     pending_ids=()
+    echo
+    echo "Audit Task Status:"
+    echo
     for task_id in $(get_task_ids); do
-      if [[ -z "$(task_json_files "$task_id")" ]] || task_has_corrupt_json "$task_id"; then
+      title="$(task_title "$task_id")"
+      if [[ -n "$(task_json_files "$task_id")" ]] && ! task_has_corrupt_json "$task_id"; then
+        printf "  ${green}[x]${reset} %s) %s\n" "$task_id" "$title"
+      elif task_has_corrupt_json "$task_id"; then
+        printf "  ${red}[!]${reset} %s) %s\n" "$task_id" "$title"
+        pending_ids+=("$task_id")
+      else
+        printf "  [ ] %s) %s\n" "$task_id" "$title"
         pending_ids+=("$task_id")
       fi
     done
+    echo
 
     if [[ "${#pending_ids[@]}" -eq 0 ]]; then
-      echo
       echo "All tasks complete for this run."
       echo
       break
