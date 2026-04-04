@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.145"
+APP_VERSION="v1.2.146"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -1997,7 +1997,7 @@ continue_run_from_dir() {
     local _post_choice
     while true; do
       echo "1) Continue with another task"
-      echo "2) Save Run and Go Back To Main Menu"
+      echo "2) Save Run and Go Back"
       echo
       read -r -p "Choose: " _post_choice
       case "$_post_choice" in
