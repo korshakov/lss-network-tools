@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.142"
+APP_VERSION="v1.2.143"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -1955,78 +1955,100 @@ continue_run_from_dir() {
     return 0
   fi
 
-  local run_input run_filter=()
-  read -r -p "Tasks to run (space/comma separated numbers, Enter = run all, 0 = back): " run_input
-  if [[ "$run_input" == "0" ]]; then
-    _restore_continue_state
-    return 0
-  fi
-  if [[ -n "$run_input" ]]; then
-    IFS=', ' read -r -a run_filter <<< "$run_input"
-  fi
+  while true; do
+    # Refresh pending list on each loop iteration
+    pending_ids=()
+    for task_id in $(get_task_ids); do
+      if [[ -z "$(task_json_files "$task_id")" ]] || task_has_corrupt_json "$task_id"; then
+        pending_ids+=("$task_id")
+      fi
+    done
 
-  local run_ids=()
-  for task_id in "${pending_ids[@]}"; do
-    if [[ "${#run_filter[@]}" -eq 0 ]]; then
-      run_ids+=("$task_id")
-    else
-      for s in "${run_filter[@]}"; do
-        [[ "$s" == "$task_id" ]] && run_ids+=("$task_id") && break
-      done
+    if [[ "${#pending_ids[@]}" -eq 0 ]]; then
+      echo
+      echo "All tasks complete for this run."
+      echo
+      break
     fi
-  done
 
-  if [[ "${#run_ids[@]}" -eq 0 ]]; then
-    echo "All pending tasks skipped. Nothing to run."
-    echo
-    read -r -p "Press Enter to continue..." _
-    _restore_continue_state
-    return 0
-  fi
-
-  local needs_stress_confirm=0
-  for task_id in "${run_ids[@]}"; do
-    [[ "$task_id" == "10" ]] && needs_stress_confirm=1
-  done
-  if [[ "$needs_stress_confirm" -eq 1 ]]; then
-    if ! confirm_gateway_stress_operation "Continue Run"; then
+    local run_input run_filter=()
+    read -r -p "Tasks to run (e.g. 1,3,4 — Enter = run all, 0 = back): " run_input
+    if [[ "$run_input" == "0" ]]; then
       _restore_continue_state
       return 0
     fi
-  fi
-
-  echo
-  echo "Running ${#run_ids[@]} task(s)..."
-  echo
-  for task_id in "${run_ids[@]}"; do
-    title="$(task_title "$task_id")"
-    if ! run_task_with_progress_output "$task_id" "$title"; then
-      echo "Task $task_id ($title) failed — continuing with remaining tasks."
+    if [[ -n "$run_input" ]]; then
+      IFS=', ' read -r -a run_filter <<< "$run_input"
     fi
+
+    local run_ids=()
+    for task_id in "${pending_ids[@]}"; do
+      if [[ "${#run_filter[@]}" -eq 0 ]]; then
+        run_ids+=("$task_id")
+      else
+        for s in "${run_filter[@]}"; do
+          [[ "$s" == "$task_id" ]] && run_ids+=("$task_id") && break
+        done
+      fi
+    done
+
+    if [[ "${#run_ids[@]}" -eq 0 ]]; then
+      echo "No matching pending tasks. Try again."
+      echo
+      continue
+    fi
+
+    local needs_stress_confirm=0
+    for task_id in "${run_ids[@]}"; do
+      [[ "$task_id" == "10" ]] && needs_stress_confirm=1
+    done
+    if [[ "$needs_stress_confirm" -eq 1 ]]; then
+      if ! confirm_gateway_stress_operation "Continue Run"; then
+        _restore_continue_state
+        return 0
+      fi
+    fi
+
+    for task_id in "${run_ids[@]}"; do
+      title="$(task_title "$task_id")"
+      if ! run_task_with_results_output "$task_id" "$title"; then
+        echo "Task $task_id ($title) failed — continuing with remaining tasks."
+      fi
+    done
+    write_manifest_for_current_run || true
+
+    echo
+    local _post_choice
+    while true; do
+      echo "1) Continue with another task"
+      echo "2) Save Run and Go Back To Main Menu"
+      echo
+      read -r -p "Choose: " _post_choice
+      case "$_post_choice" in
+        1) echo; break ;;
+        2)
+          local build_now
+          read -r -p "Build report now? [y/N]: " build_now
+          if [[ "$build_now" =~ ^[Yy]$ ]]; then
+            local export_dir report_name
+            export_dir="$(default_report_export_dir)"
+            mkdir -p "$export_dir" 2>/dev/null || true
+            report_name="lss-network-tools-report-$(basename "$run_dir")-$(date '+%H-%M').txt"
+            RUN_REPORT_FILE="$export_dir/$report_name"
+            prompt_prepared_by
+            if build_report_for_current_run; then
+              echo "TXT report: $RUN_REPORT_FILE"
+              generate_pdf_report || true
+            fi
+          fi
+          _restore_continue_state
+          return 0
+          ;;
+        *) echo "Choose 1 or 2." ;;
+      esac
+    done
   done
-  write_manifest_for_current_run || true
-  echo
-  echo "Done."
 
-  # Fix 4: offer to build report immediately
-  echo
-  local build_now
-  read -r -p "Build report now? [y/N]: " build_now
-  if [[ "$build_now" =~ ^[Yy]$ ]]; then
-    local export_dir report_name
-    export_dir="$(default_report_export_dir)"
-    mkdir -p "$export_dir" 2>/dev/null || true
-    report_name="lss-network-tools-report-$(basename "$run_dir")-$(date '+%H-%M').txt"
-    RUN_REPORT_FILE="$export_dir/$report_name"
-    prompt_prepared_by
-    if build_report_for_current_run; then
-      echo "TXT report: $RUN_REPORT_FILE"
-      generate_pdf_report || true
-    fi
-  fi
-
-  echo
-  read -r -p "Press Enter to continue..." _
   _restore_continue_state
 }
 
