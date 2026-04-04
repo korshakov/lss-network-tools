@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.146"
+APP_VERSION="v1.2.147"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -2018,7 +2018,6 @@ view_results_for_run_dir() {
   local run_dir="$1"
   local previous_output_dir="${RUN_OUTPUT_DIR:-}"
   local available_ids=()
-  local available_titles=()
   local task_id title choice_str
   local tmp_out entry_index file_path description
   local cyan='\033[0;36m'
@@ -2029,32 +2028,34 @@ view_results_for_run_dir() {
   # Restore RUN_OUTPUT_DIR on any exit from this function, including crashes
   trap 'RUN_OUTPUT_DIR="$previous_output_dir"; trap - RETURN' RETURN
 
-  for task_id in $(get_task_ids); do
-    title="$(task_title "$task_id")"
-    if [[ -n "$(task_json_files "$task_id")" ]]; then
-      available_ids+=("$task_id")
-      available_titles+=("$title")
-    fi
-  done
-
-  if [[ "${#available_ids[@]}" -eq 0 ]]; then
-    echo
-    echo "No task results available for this run."
-    echo
-    read -r -p "Press Enter to continue..." _
-    return
-  fi
+  local green='\033[0;32m'
+  local reset_col='\033[0m'
 
   while true; do
+    # Rebuild available list each iteration
+    available_ids=()
     echo
-    echo "Available Results:"
-    echo "=================="
-    local idx=1
-    for title in "${available_titles[@]}"; do
-      echo "$idx) $title"
-      idx=$((idx + 1))
+    echo "Task Results:"
+    echo "============="
+    echo
+    for task_id in $(get_task_ids); do
+      title="$(task_title "$task_id")"
+      if [[ -n "$(task_json_files "$task_id")" ]]; then
+        available_ids+=("$task_id")
+        printf "  ${green}[x]${reset_col} %s) %s\n" "$task_id" "$title"
+      else
+        printf "  [ ] %s) %s\n" "$task_id" "$title"
+      fi
     done
     echo
+
+    if [[ "${#available_ids[@]}" -eq 0 ]]; then
+      echo "No task results available for this run."
+      echo
+      read -r -p "Press Enter to continue..." _
+      return
+    fi
+
     read -r -p "Enter task numbers to view (e.g. 1,3), 0 to go back, 00 for main menu: " choice_str
 
     [[ "$choice_str" == "00" ]] && { _GOTO_MAIN_MENU=true; return; }
@@ -2070,8 +2071,14 @@ view_results_for_run_dir() {
     for c in "${choice_arr[@]+"${choice_arr[@]}"}"; do
       c="${c// /}"
       [[ -z "$c" ]] && continue
-      if [[ "$c" =~ ^[0-9]+$ ]] && (( c >= 1 && c <= ${#available_ids[@]} )); then
-        selected_ids+=("${available_ids[$((c - 1))]}")
+      if [[ "$c" =~ ^[0-9]+$ ]] && run_task_exists "$c"; then
+        if [[ -n "$(task_json_files "$c")" ]]; then
+          selected_ids+=("$c")
+        else
+          echo "No results for task $c yet."
+          valid=false
+          break
+        fi
       else
         echo "Invalid selection: $c"
         valid=false
