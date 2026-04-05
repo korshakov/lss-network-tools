@@ -42,6 +42,7 @@ SHOW_FUNCTION_HEADER=1
 TASK_OUTPUT_INDENT=""
 SPINNER_PID=""
 NETWORK_INTERRUPTED=false
+CAFFEINATE_PID=""
 _GOTO_MAIN_MENU=false
 TASKS_DATA=$(cat <<'TASKS'
 1|Interface Network Info|interface-network-info.json
@@ -3036,6 +3037,10 @@ finalize_run() {
 
   if [[ -n "$SESSION_DEBUG_LOG" && -f "$SESSION_DEBUG_LOG" ]]; then
     rm -f "$SESSION_DEBUG_LOG" 2>/dev/null || true
+  fi
+
+  if [[ -n "$CAFFEINATE_PID" ]]; then
+    kill "$CAFFEINATE_PID" 2>/dev/null || true
   fi
 
 }
@@ -10789,6 +10794,12 @@ warn_if_not_root
 initialize_debug_logging
 trap finalize_run EXIT
 trap handle_err_exit ERR
+
+# Prevent macOS display/system sleep while the tool is running
+if [[ "$OS" == "macos" ]] && command -v caffeinate >/dev/null 2>&1; then
+  caffeinate -d -i -s &
+  CAFFEINATE_PID=$!
+fi
 
 # Quick synchronous update check (3s timeout) — result stored in variable
 # and displayed as a banner in startup_menu if a newer version is available.
