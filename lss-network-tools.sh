@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.171"
+APP_VERSION="v1.2.172"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -10666,6 +10666,10 @@ run_task_with_results_output() {
   if ! run_task_by_id "$func_id" | sed 's/^/  /'; then
     SHOW_FUNCTION_HEADER=1
     TASK_OUTPUT_INDENT=""
+    echo
+    printf "  ${cyan}──────────────────────────────────────────────────${reset}\n"
+    echo
+    read -r -p "  Press Enter to continue..." _
     return 1
   fi
   SHOW_FUNCTION_HEADER=1
@@ -10673,6 +10677,7 @@ run_task_with_results_output() {
   echo
   printf "  ${cyan}──────────────────────────────────────────────────${reset}\n"
   echo
+  read -r -p "  Press Enter to continue..." _
 }
 
 run_all_tasks() {
