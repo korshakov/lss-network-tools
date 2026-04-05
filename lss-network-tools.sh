@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.159"
+APP_VERSION="v1.2.160"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -2269,29 +2269,30 @@ compare_runs_cli() {
     _cmp_render "$task_id" "$run_dir_a" "$ta"
     _cmp_render "$task_id" "$run_dir_b" "$tb"
 
-    # Zip side by side with line wrapping
+    # Zip side by side — pair original lines, wrap each, align by max height per pair
     python3 - "$ta" "$tb" "$col_w" << 'PYEOF'
 import sys, textwrap
 fa, fb, col_w = sys.argv[1], sys.argv[2], int(sys.argv[3])
-def wrap_lines(path, w):
-    out = []
+def wrap_line(line, w):
+    if len(line) <= w:
+        return [line]
+    indent = ' ' * (len(line) - len(line.lstrip()))
+    chunks = textwrap.wrap(line, w, subsequent_indent=indent,
+                           break_long_words=True, break_on_hyphens=False)
+    return chunks if chunks else [line[:w]]
+def read_lines(path):
     with open(path) as f:
-        for line in f:
-            line = line.rstrip('\n')
-            if len(line) <= w:
-                out.append(line)
-            else:
-                indent = ' ' * (len(line) - len(line.lstrip()))
-                chunks = textwrap.wrap(line, w, subsequent_indent=indent,
-                                       break_long_words=True, break_on_hyphens=False)
-                out.extend(chunks if chunks else [line[:w]])
-    return out
-left  = wrap_lines(fa, col_w)
-right = wrap_lines(fb, col_w)
-for i in range(max(len(left), len(right), 1)):
-    l = left[i]  if i < len(left)  else ''
-    r = right[i] if i < len(right) else ''
-    print(f'{l:<{col_w}}   {r}')
+        return [l.rstrip('\n') for l in f]
+left_raw  = read_lines(fa)
+right_raw = read_lines(fb)
+n = max(len(left_raw), len(right_raw), 1)
+for i in range(n):
+    lw = wrap_line(left_raw[i]  if i < len(left_raw)  else '', col_w)
+    rw = wrap_line(right_raw[i] if i < len(right_raw) else '', col_w)
+    for j in range(max(len(lw), len(rw))):
+        l = lw[j] if j < len(lw) else ''
+        r = rw[j] if j < len(rw) else ''
+        print(f'{l:<{col_w}}   {r}')
 PYEOF
     rm -f "$ta" "$tb"
 
