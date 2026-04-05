@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.165"
+APP_VERSION="v1.2.166"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -2191,13 +2191,18 @@ compare_runs_cli() {
   local effective_width=$(( col_w * 2 + 3 ))
 
   # Helper: render a single task's JSON to a plain-text file using existing renderers
+  # Optional 4th arg: direct file path override (used for multi-entry device files)
   _cmp_render() {
-    local tid="$1" rdir="$2" out="$3"
+    local tid="$1" rdir="$2" out="$3" fp_override="${4:-}"
     local prev_dir="${RUN_OUTPUT_DIR:-}"
-    RUN_OUTPUT_DIR="$rdir"
     local fp
-    fp="$(task_output_path "$tid" 2>/dev/null || true)"
-    RUN_OUTPUT_DIR="$prev_dir"
+    if [[ -n "$fp_override" && -f "$fp_override" ]]; then
+      fp="$fp_override"
+    else
+      RUN_OUTPUT_DIR="$rdir"
+      fp="$(task_output_path "$tid" 2>/dev/null || true)"
+      RUN_OUTPUT_DIR="$prev_dir"
+    fi
     [[ -z "$fp" || ! -f "$fp" ]] && { printf "(not run)\n" > "$out"; return; }
     case "$tid" in
       1)  render_interface_info_report              "$fp" "$out" ;;
@@ -2240,23 +2245,16 @@ compare_runs_cli() {
   printf "${bold}%-${col_w}s   %-${col_w}s${reset}\n" "Date: $date_a" "Date: $date_b"
   python3 -c "w=$col_w; print('─'*w + '   ' + '─'*w)"
 
-  local prev_dir="${RUN_OUTPUT_DIR:-}"
-  for task_id in $(get_task_ids); do
-    # Check if either run has data for this task
-    RUN_OUTPUT_DIR="$run_dir_a"; local fa; fa="$(task_output_path "$task_id" 2>/dev/null || true)"
-    RUN_OUTPUT_DIR="$run_dir_b"; local fb; fb="$(task_output_path "$task_id" 2>/dev/null || true)"
-    RUN_OUTPUT_DIR="$prev_dir"
-    [[ ! -f "$fa" && ! -f "$fb" ]] && continue
-
-    # Section header
-    local title; title="$(task_title "$task_id")"
-    local header_text="Task ${task_id} — ${title}"
-    local hpad=$(( (effective_width - ${#header_text}) / 2 ))
-    [[ "$hpad" -lt 0 ]] && hpad=0
+  # Helper: render one comparison section given explicit file paths for each side
+  _cmp_section() {
+    local _tid="$1" _title="$2" _fa="${3:-}" _fb="${4:-}"
+    local _header="Task ${_tid} — ${_title}"
+    local _hpad=$(( (effective_width - ${#_header}) / 2 ))
+    [[ "$_hpad" -lt 0 ]] && _hpad=0
     echo
     python3 -c "print('\033[1;33m' + '='*$effective_width + '\033[0m')"
     echo
-    printf "%${hpad}s${bold}%s${reset}\n" "" "$header_text"
+    printf "%${_hpad}s${bold}%s${reset}\n" "" "$_header"
     echo
     python3 -c "print('\033[1;33m' + '='*$effective_width + '\033[0m')"
     echo
@@ -2264,16 +2262,12 @@ compare_runs_cli() {
     echo
     python3 -c "print('\033[0;36m' + '='*$col_w + '   ' + '='*$col_w + '\033[0m')"
     echo
-
-    # Render both sides to temp files
-    local ta tb
-    ta="$(mktemp /tmp/lss-cmp-XXXXXX)"
-    tb="$(mktemp /tmp/lss-cmp-XXXXXX)"
-    _cmp_render "$task_id" "$run_dir_a" "$ta"
-    _cmp_render "$task_id" "$run_dir_b" "$tb"
-
-    # Zip side by side — pair original lines, wrap each, align by max height per pair
-    python3 - "$ta" "$tb" "$col_w" << 'PYEOF'
+    local _ta _tb
+    _ta="$(mktemp /tmp/lss-cmp-XXXXXX)"
+    _tb="$(mktemp /tmp/lss-cmp-XXXXXX)"
+    _cmp_render "$_tid" "$run_dir_a" "$_ta" "$_fa"
+    _cmp_render "$_tid" "$run_dir_b" "$_tb" "$_fb"
+    python3 - "$_ta" "$_tb" "$col_w" << 'PYEOF'
 import sys, textwrap
 fa, fb, col_w = sys.argv[1], sys.argv[2], int(sys.argv[3])
 def wrap_line(line, w):
@@ -2297,12 +2291,40 @@ for i in range(n):
         r = rw[j] if j < len(rw) else ''
         print(f'{l:<{col_w}}   {r}')
 PYEOF
-    rm -f "$ta" "$tb"
-
+    rm -f "$_ta" "$_tb"
     echo
     python3 -c "print('\033[0;36m' + '='*$col_w + '   ' + '='*$col_w + '\033[0m')"
     echo
     python3 -c "print('\033[1;33m' + '='*$effective_width + '\033[0m')"
+  }
+
+  local prev_dir="${RUN_OUTPUT_DIR:-}"
+  for task_id in $(get_task_ids); do
+    local title; title="$(task_title "$task_id")"
+
+    if task_supports_multiple_entries "$task_id"; then
+      # Collect actual device files from both runs
+      local files_a=() files_b=()
+      RUN_OUTPUT_DIR="$run_dir_a"
+      while IFS= read -r f; do [[ -n "$f" ]] && files_a+=("$f"); done < <(task_json_files "$task_id" 2>/dev/null || true)
+      RUN_OUTPUT_DIR="$run_dir_b"
+      while IFS= read -r f; do [[ -n "$f" ]] && files_b+=("$f"); done < <(task_json_files "$task_id" 2>/dev/null || true)
+      RUN_OUTPUT_DIR="$prev_dir"
+      local n_dev=$(( ${#files_a[@]} > ${#files_b[@]} ? ${#files_a[@]} : ${#files_b[@]} ))
+      [[ "$n_dev" -eq 0 ]] && continue
+      for (( dev_idx=0; dev_idx<n_dev; dev_idx++ )); do
+        local fa_dev="" fb_dev=""
+        [[ $dev_idx -lt ${#files_a[@]} ]] && fa_dev="${files_a[$dev_idx]}"
+        [[ $dev_idx -lt ${#files_b[@]} ]] && fb_dev="${files_b[$dev_idx]}"
+        _cmp_section "$task_id" "$title (device $(( dev_idx + 1 )))" "$fa_dev" "$fb_dev"
+      done
+    else
+      RUN_OUTPUT_DIR="$run_dir_a"; local fa; fa="$(task_output_path "$task_id" 2>/dev/null || true)"
+      RUN_OUTPUT_DIR="$run_dir_b"; local fb; fb="$(task_output_path "$task_id" 2>/dev/null || true)"
+      RUN_OUTPUT_DIR="$prev_dir"
+      [[ ! -f "$fa" && ! -f "$fb" ]] && continue
+      _cmp_section "$task_id" "$title" "$fa" "$fb"
+    fi
   done
 
   echo
@@ -2344,7 +2366,12 @@ build_compare_report_for_run_dir() {
 
   local export_dir
   export_dir="$(default_report_export_dir)"
-  local pdf_name="lss-compare-$(basename "$run_dir_a")-vs-$(basename "$run_dir_b")-$(date '+%H-%M').pdf"
+  local _da _db
+  _da="$(jq -r '.generated_at // ""' "$run_dir_a/manifest.json" 2>/dev/null | sed 's/ /-/g; s/://g' || true)"
+  _db="$(jq -r '.generated_at // ""' "$run_dir_b/manifest.json" 2>/dev/null | sed 's/ /-/g; s/://g' || true)"
+  [[ -z "$_da" ]] && _da="$(date '+%d-%m-%Y')"
+  [[ -z "$_db" ]] && _db="$(basename "$run_dir_b")"
+  local pdf_name="lss-compare-${_da}-vs-${_db}.pdf"
 
   while true; do
     echo
