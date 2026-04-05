@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.157"
+APP_VERSION="v1.2.158"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -2223,14 +2223,17 @@ compare_runs_cli() {
 
   clear_screen_if_supported
 
-  # Column header — name on first line, date on second line
-  local name_a date_a name_b date_b
-  name_a="$(echo "$label_a" | sed 's/  \[.*//')"
-  date_a="$(echo "$label_a" | grep -o '\[.*\]' || true)"
-  name_b="$(echo "$label_b" | sed 's/  \[.*//')"
-  date_b="$(echo "$label_b" | grep -o '\[.*\]' || true)"
-  printf "${bold}%-${col_w}s   %-${col_w}s${reset}\n" "$name_a" "$name_b"
-  printf "${bold}%-${col_w}s   %-${col_w}s${reset}\n" "$date_a" "$date_b"
+  # Column header — client / location / date per run
+  local client_a location_a date_a client_b location_b date_b
+  client_a="$(jq -r '.client // ""'      "$run_dir_a/manifest.json" 2>/dev/null || true)"
+  location_a="$(jq -r '.location // ""'  "$run_dir_a/manifest.json" 2>/dev/null || true)"
+  date_a="$(jq -r '.generated_at // ""'  "$run_dir_a/manifest.json" 2>/dev/null || true)"
+  client_b="$(jq -r '.client // ""'      "$run_dir_b/manifest.json" 2>/dev/null || true)"
+  location_b="$(jq -r '.location // ""'  "$run_dir_b/manifest.json" 2>/dev/null || true)"
+  date_b="$(jq -r '.generated_at // ""'  "$run_dir_b/manifest.json" 2>/dev/null || true)"
+  printf "${bold}%-${col_w}s   %-${col_w}s${reset}\n" "Client: $client_a" "Client: $client_b"
+  printf "${bold}%-${col_w}s   %-${col_w}s${reset}\n" "Location: $location_a" "Location: $location_b"
+  printf "${bold}%-${col_w}s   %-${col_w}s${reset}\n" "Date: $date_a" "Date: $date_b"
   python3 -c "w=$col_w; print('─'*w + '   ' + '─'*w)"
 
   local prev_dir="${RUN_OUTPUT_DIR:-}"
@@ -2252,7 +2255,7 @@ compare_runs_cli() {
     printf "%${hpad}s${bold}%s${reset}\n" "" "$header_text"
     echo
     python3 -c "print('\033[1;33m' + '='*$term_width + '\033[0m')"
-    echo
+    printf "%-${col_w}s   %-${col_w}s\n" "Date: $date_a" "Date: $date_b"
     python3 -c "print('\033[0;36m' + '='*$col_w + '   ' + '='*$col_w + '\033[0m')"
     echo
 
