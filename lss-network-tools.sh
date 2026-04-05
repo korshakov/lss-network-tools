@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.163"
+APP_VERSION="v1.2.164"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -2188,6 +2188,7 @@ compare_runs_cli() {
   [[ "$term_width" -lt 40 ]] && term_width="$(tput cols 2>/dev/null || echo 120)"
   [[ "$term_width" -lt 40 ]] && term_width=120
   col_w=$(( (term_width * 2 / 3 - 3) / 2 ))
+  local effective_width=$(( col_w * 2 + 3 ))
 
   # Helper: render a single task's JSON to a plain-text file using existing renderers
   _cmp_render() {
@@ -2250,14 +2251,14 @@ compare_runs_cli() {
     # Section header
     local title; title="$(task_title "$task_id")"
     local header_text="Task ${task_id} — ${title}"
-    local hpad=$(( (term_width - ${#header_text}) / 2 ))
+    local hpad=$(( (effective_width - ${#header_text}) / 2 ))
     [[ "$hpad" -lt 0 ]] && hpad=0
     echo
-    python3 -c "print('\033[1;33m' + '='*$term_width + '\033[0m')"
+    python3 -c "print('\033[1;33m' + '='*$effective_width + '\033[0m')"
     echo
     printf "%${hpad}s${bold}%s${reset}\n" "" "$header_text"
     echo
-    python3 -c "print('\033[1;33m' + '='*$term_width + '\033[0m')"
+    python3 -c "print('\033[1;33m' + '='*$effective_width + '\033[0m')"
     echo
     printf "%-${col_w}s   %-${col_w}s\n" "Date: $date_a" "Date: $date_b"
     echo
@@ -2301,7 +2302,7 @@ PYEOF
     echo
     python3 -c "print('\033[0;36m' + '='*$col_w + '   ' + '='*$col_w + '\033[0m')"
     echo
-    python3 -c "print('\033[1;33m' + '='*$term_width + '\033[0m')"
+    python3 -c "print('\033[1;33m' + '='*$effective_width + '\033[0m')"
   done
 
   echo
