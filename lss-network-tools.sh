@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.160"
+APP_VERSION="v1.2.161"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -2181,10 +2181,11 @@ compare_runs_cli() {
   local bold='\033[1m'
   local reset='\033[0m'
 
-  # Terminal width and column sizes
+  # Terminal width and column sizes — prefer $COLUMNS (bash-maintained), fall back to tput
   local term_width col_w
-  term_width="$(tput cols 2>/dev/null || echo 120)"
-  [[ "$term_width" -gt 220 ]] && term_width=220
+  term_width="${COLUMNS:-0}"
+  [[ "$term_width" -lt 40 ]] && term_width="$(tput cols 2>/dev/null || echo 120)"
+  [[ "$term_width" -lt 40 ]] && term_width=120
   col_w=$(( (term_width - 3) / 2 ))
 
   # Helper: render a single task's JSON to a plain-text file using existing renderers
