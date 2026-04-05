@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.173"
+APP_VERSION="v1.2.174"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -10766,7 +10766,7 @@ main_menu() {
           if [[ -z "$title" ]]; then
             title="Function $choice"
           fi
-          run_task_with_results_output "$choice" "$title"
+          run_task_with_results_output "$choice" "$title" || true
           [[ "${_GOTO_MAIN_MENU:-false}" == "true" ]] && return 0
         else
           echo "Invalid selection. Try again."
