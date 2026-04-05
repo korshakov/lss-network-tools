@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.158"
+APP_VERSION="v1.2.159"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -2231,6 +2231,7 @@ compare_runs_cli() {
   client_b="$(jq -r '.client // ""'      "$run_dir_b/manifest.json" 2>/dev/null || true)"
   location_b="$(jq -r '.location // ""'  "$run_dir_b/manifest.json" 2>/dev/null || true)"
   date_b="$(jq -r '.generated_at // ""'  "$run_dir_b/manifest.json" 2>/dev/null || true)"
+  python3 -c "w=$col_w; print('─'*w + '   ' + '─'*w)"
   printf "${bold}%-${col_w}s   %-${col_w}s${reset}\n" "Client: $client_a" "Client: $client_b"
   printf "${bold}%-${col_w}s   %-${col_w}s${reset}\n" "Location: $location_a" "Location: $location_b"
   printf "${bold}%-${col_w}s   %-${col_w}s${reset}\n" "Date: $date_a" "Date: $date_b"
@@ -2255,7 +2256,9 @@ compare_runs_cli() {
     printf "%${hpad}s${bold}%s${reset}\n" "" "$header_text"
     echo
     python3 -c "print('\033[1;33m' + '='*$term_width + '\033[0m')"
+    echo
     printf "%-${col_w}s   %-${col_w}s\n" "Date: $date_a" "Date: $date_b"
+    echo
     python3 -c "print('\033[0;36m' + '='*$col_w + '   ' + '='*$col_w + '\033[0m')"
     echo
 
