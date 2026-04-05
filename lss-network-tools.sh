@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.147"
+APP_VERSION="v1.2.148"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -2145,7 +2145,6 @@ compare_runs_cli() {
   local label_a
   label_a="$(run_dir_label "$run_dir_a")"
 
-  # Build list of other runs
   local run_dirs=()
   while IFS= read -r dir; do
     [[ "$dir" == "$run_dir_a" ]] && continue
@@ -2178,158 +2177,94 @@ compare_runs_cli() {
   local label_b
   label_b="$(run_dir_label "$run_dir_b")"
 
-  echo
-  echo "  A (this):   $label_a"
-  echo "  B (compare): $label_b"
-  echo
-  printf '%0.s─' {1..60}; echo
+  local cyan='\033[0;36m'
+  local bold='\033[1m'
+  local reset='\033[0m'
 
-  # ── Task 1: Interface / IP ──────────────────────────────────────────────────
-  local f1a="$run_dir_a/interface-network-info.json"
-  local f1b="$run_dir_b/interface-network-info.json"
-  if [[ -f "$f1a" && -f "$f1b" ]]; then
-    local ip_a gw_a ip_b gw_b
-    ip_a="$(jq -r '.ip_address // empty' "$f1a" 2>/dev/null)"
-    gw_a="$(jq -r '.gateway // empty' "$f1a" 2>/dev/null)"
-    ip_b="$(jq -r '.ip_address // empty' "$f1b" 2>/dev/null)"
-    gw_b="$(jq -r '.gateway // empty' "$f1b" 2>/dev/null)"
-    echo
-    echo "INTERFACE (Task 1)"
-    if [[ "$ip_a" != "$ip_b" ]]; then
-      echo "  IP:       $ip_b  →  $ip_a  (changed)"
-    else
-      echo "  IP:       $ip_a  (no change)"
-    fi
-    if [[ "$gw_a" != "$gw_b" ]]; then
-      echo "  Gateway:  $gw_b  →  $gw_a  (changed)"
-    else
-      echo "  Gateway:  $gw_a  (no change)"
-    fi
-  fi
+  # Terminal width and column sizes
+  local term_width col_w
+  term_width="$(tput cols 2>/dev/null || echo 120)"
+  [[ "$term_width" -gt 220 ]] && term_width=220
+  col_w=$(( (term_width - 3) / 2 ))
 
-  # ── Task 2: Internet Speed ──────────────────────────────────────────────────
-  local f2a="$run_dir_a/internet-speed-test.json"
-  local f2b="$run_dir_b/internet-speed-test.json"
-  if [[ -f "$f2a" && -f "$f2b" ]]; then
-    local dl_a ul_a ping_a dl_b ul_b ping_b
-    dl_a="$(jq -r '.download_speed // empty' "$f2a" 2>/dev/null)"
-    ul_a="$(jq -r '.upload_speed // empty' "$f2a" 2>/dev/null)"
-    ping_a="$(jq -r '.ping_latency // empty' "$f2a" 2>/dev/null)"
-    dl_b="$(jq -r '.download_speed // empty' "$f2b" 2>/dev/null)"
-    ul_b="$(jq -r '.upload_speed // empty' "$f2b" 2>/dev/null)"
-    ping_b="$(jq -r '.ping_latency // empty' "$f2b" 2>/dev/null)"
-    echo
-    echo "INTERNET SPEED (Task 2)"
-    python3 -c "
-def fmt(b, a, unit, higher_better=True):
-    try:
-        b, a = float(b), float(a)
-        diff = a - b
-        pct = (diff / b * 100) if b else 0
-        arrow = ('↑' if diff > 0 else '↓') if diff != 0 else '='
-        better = (diff > 0) == higher_better
-        tag = ' (improved)' if better and diff != 0 else (' (worse)' if not better and diff != 0 else '')
-        print(f'  {arrow}  {b:.1f} {unit}  →  {a:.1f} {unit}  ({diff:+.1f}, {pct:+.1f}%){tag}')
-    except:
-        print(f'  {b} {unit}  →  {a} {unit}')
-print('  Download:'); fmt('$dl_b', '$dl_a', 'Mbps', True)
-print('  Upload:');   fmt('$ul_b', '$ul_a', 'Mbps', True)
-print('  Ping:');     fmt('$ping_b', '$ping_a', 'ms', False)
-" 2>/dev/null || true
-  fi
+  # Helper: render a single task's JSON to a plain-text file using existing renderers
+  _cmp_render() {
+    local tid="$1" rdir="$2" out="$3"
+    local prev_dir="${RUN_OUTPUT_DIR:-}"
+    RUN_OUTPUT_DIR="$rdir"
+    local fp
+    fp="$(task_output_path "$tid" 2>/dev/null || true)"
+    RUN_OUTPUT_DIR="$prev_dir"
+    [[ -z "$fp" || ! -f "$fp" ]] && { printf "(not run)\n" > "$out"; return; }
+    case "$tid" in
+      1)  render_interface_info_report              "$fp" "$out" ;;
+      2)  render_speed_test_report                  "$fp" "$out" ;;
+      3)  render_gateway_report                     "$fp" "$out" ;;
+      4)  render_dhcp_report                        "$fp" "$out" ;;
+      5)  render_dhcp_response_time_report          "$fp" "$out" ;;
+      6)  render_generic_network_scan_report        "$fp" "$out" "DNS" ;;
+      7)  render_generic_network_scan_report        "$fp" "$out" "LDAP/AD" ;;
+      8)  render_generic_network_scan_report        "$fp" "$out" "SMB/NFS" ;;
+      9)  render_generic_network_scan_report        "$fp" "$out" "Printer" ;;
+      10) render_gateway_stress_report              "$fp" "$out" ;;
+      11) render_vlan_trunk_report                  "$fp" "$out" ;;
+      12) render_duplicate_ip_report                "$fp" "$out" ;;
+      13) render_custom_target_port_scan_report     "$fp" "$out" ;;
+      14) render_custom_target_stress_report        "$fp" "$out" ;;
+      15) render_custom_target_identity_report      "$fp" "$out" ;;
+      16) render_custom_target_dns_assessment_report "$fp" "$out" ;;
+      17) render_wireless_site_survey_report        "$fp" "$out" ;;
+      18) render_unifi_discovery_report             "$fp" "$out" ;;
+      19) render_unifi_adoption_report              "$fp" "$out" ;;
+      20) render_find_device_by_mac_report          "$fp" "$out" ;;
+      *)  printf "(unsupported)\n" > "$out" ;;
+    esac
+  }
 
-  # ── Task 4: DHCP Servers ────────────────────────────────────────────────────
-  local f4a="$run_dir_a/dhcp-scan.json"
-  local f4b="$run_dir_b/dhcp-scan.json"
-  if [[ -f "$f4a" && -f "$f4b" ]]; then
-    echo
-    echo "DHCP SERVERS (Task 4)"
-    local servers_a servers_b
-    servers_a="$(jq -r '.servers[]?.ip // empty' "$f4a" 2>/dev/null | sort)"
-    servers_b="$(jq -r '.servers[]?.ip // empty' "$f4b" 2>/dev/null | sort)"
-    local added removed
-    added="$(comm -23 <(echo "$servers_a") <(echo "$servers_b") 2>/dev/null || true)"
-    removed="$(comm -13 <(echo "$servers_a") <(echo "$servers_b") 2>/dev/null || true)"
-    if [[ -z "$added" && -z "$removed" ]]; then
-      echo "  No change."
-    else
-      while IFS= read -r s; do [[ -n "$s" ]] && echo "  + $s  (new)"; done <<< "$added"
-      while IFS= read -r s; do [[ -n "$s" ]] && echo "  - $s  (gone)"; done <<< "$removed"
-    fi
-  fi
+  clear_screen_if_supported
 
-  # ── Task 6: DNS Servers ─────────────────────────────────────────────────────
-  local f6a="$run_dir_a/dns-scan.json"
-  local f6b="$run_dir_b/dns-scan.json"
-  if [[ -f "$f6a" && -f "$f6b" ]]; then
-    echo
-    echo "DNS SERVERS (Task 6)"
-    local dns_a dns_b
-    dns_a="$(jq -r '.servers[]?.ip // empty' "$f6a" 2>/dev/null | sort)"
-    dns_b="$(jq -r '.servers[]?.ip // empty' "$f6b" 2>/dev/null | sort)"
-    local dns_added dns_removed
-    dns_added="$(comm -23 <(echo "$dns_a") <(echo "$dns_b") 2>/dev/null || true)"
-    dns_removed="$(comm -13 <(echo "$dns_a") <(echo "$dns_b") 2>/dev/null || true)"
-    if [[ -z "$dns_added" && -z "$dns_removed" ]]; then
-      echo "  No change."
-    else
-      while IFS= read -r s; do [[ -n "$s" ]] && echo "  + $s  (new)"; done <<< "$dns_added"
-      while IFS= read -r s; do [[ -n "$s" ]] && echo "  - $s  (gone)"; done <<< "$dns_removed"
-    fi
-  fi
+  # Column header
+  printf "${bold}%-${col_w}s ${reset}│${bold} %-${col_w}s${reset}\n" "$label_a" "$label_b"
+  python3 -c "w=$col_w; print('─'*w + '─┼─' + '─'*w)"
 
-  # ── Task 12: Duplicate IPs ──────────────────────────────────────────────────
-  local f12a="$run_dir_a/duplicate-ip-scan.json"
-  local f12b="$run_dir_b/duplicate-ip-scan.json"
-  if [[ -f "$f12a" && -f "$f12b" ]]; then
-    local dup_a dup_b
-    dup_a="$(jq -r '.duplicate_count // 0' "$f12a" 2>/dev/null)"
-    dup_b="$(jq -r '.duplicate_count // 0' "$f12b" 2>/dev/null)"
-    echo
-    echo "DUPLICATE IPs (Task 12)"
-    if [[ "$dup_a" == "$dup_b" ]]; then
-      echo "  No change. ($dup_a duplicate(s))"
-    elif [[ "$dup_a" -gt "$dup_b" ]]; then
-      echo "  ↑ $dup_b → $dup_a duplicate(s)  (worse)"
-    else
-      echo "  ↓ $dup_b → $dup_a duplicate(s)  (improved)"
-    fi
-  fi
+  local prev_dir="${RUN_OUTPUT_DIR:-}"
+  for task_id in $(get_task_ids); do
+    # Check if either run has data for this task
+    RUN_OUTPUT_DIR="$run_dir_a"; local fa; fa="$(task_output_path "$task_id" 2>/dev/null || true)"
+    RUN_OUTPUT_DIR="$run_dir_b"; local fb; fb="$(task_output_path "$task_id" 2>/dev/null || true)"
+    RUN_OUTPUT_DIR="$prev_dir"
+    [[ ! -f "$fa" && ! -f "$fb" ]] && continue
 
-  # ── Task 18: UniFi Devices ──────────────────────────────────────────────────
-  local f18a="$run_dir_a/unifi-discovery.json"
-  local f18b="$run_dir_b/unifi-discovery.json"
-  if [[ -f "$f18a" && -f "$f18b" ]]; then
+    # Section header (full width)
+    local title; title="$(task_title "$task_id")"
     echo
-    echo "UNIFI DEVICES (Task 18)"
-    local macs_a macs_b
-    macs_a="$(jq -r '.devices[]?.mac // empty' "$f18a" 2>/dev/null | sort)"
-    macs_b="$(jq -r '.devices[]?.mac // empty' "$f18b" 2>/dev/null | sort)"
-    local new_macs gone_macs
-    new_macs="$(comm -23 <(echo "$macs_a") <(echo "$macs_b") 2>/dev/null || true)"
-    gone_macs="$(comm -13 <(echo "$macs_a") <(echo "$macs_b") 2>/dev/null || true)"
-    if [[ -z "$new_macs" && -z "$gone_macs" ]]; then
-      echo "  No change."
-    else
-      while IFS= read -r m; do
-        [[ -z "$m" ]] && continue
-        local ip model
-        ip="$(jq -r --arg m "$m" '.devices[]? | select(.mac==$m) | .ip' "$f18a" 2>/dev/null)"
-        model="$(jq -r --arg m "$m" '.devices[]? | select(.mac==$m) | .model // ""' "$f18a" 2>/dev/null)"
-        echo "  + $m  ${ip:+($ip)  }${model:+$model  }(new)"
-      done <<< "$new_macs"
-      while IFS= read -r m; do
-        [[ -z "$m" ]] && continue
-        local ip model
-        ip="$(jq -r --arg m "$m" '.devices[]? | select(.mac==$m) | .ip' "$f18b" 2>/dev/null)"
-        model="$(jq -r --arg m "$m" '.devices[]? | select(.mac==$m) | .model // ""' "$f18b" 2>/dev/null)"
-        echo "  - $m  ${ip:+($ip)  }${model:+$model  }(gone)"
-      done <<< "$gone_macs"
-    fi
-  fi
+    printf "${cyan}================================================${reset}\n"
+    printf "${bold}  Task %s — %s${reset}\n" "$task_id" "$title"
+    printf "${cyan}================================================${reset}\n"
+
+    # Render both sides to temp files
+    local ta tb
+    ta="$(mktemp /tmp/lss-cmp-XXXXXX)"
+    tb="$(mktemp /tmp/lss-cmp-XXXXXX)"
+    _cmp_render "$task_id" "$run_dir_a" "$ta"
+    _cmp_render "$task_id" "$run_dir_b" "$tb"
+
+    # Zip side by side
+    python3 - "$ta" "$tb" "$col_w" << 'PYEOF'
+import sys
+fa, fb, col_w = sys.argv[1], sys.argv[2], int(sys.argv[3])
+with open(fa) as f: left  = [l.rstrip('\n') for l in f]
+with open(fb) as f: right = [l.rstrip('\n') for l in f]
+for i in range(max(len(left), len(right), 1)):
+    l = (left[i]  if i < len(left)  else '')[:col_w]
+    r = (right[i] if i < len(right) else '')[:col_w]
+    print(f'{l:<{col_w}} │ {r}')
+PYEOF
+    rm -f "$ta" "$tb"
+  done
 
   echo
-  printf '%0.s─' {1..60}; echo
+  python3 -c "w=$term_width; print('─'*w)"
   echo
   read -r -p "Press Enter to continue..." _
 }
