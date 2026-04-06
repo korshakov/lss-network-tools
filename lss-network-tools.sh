@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.232"
+APP_VERSION="v1.2.233"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -11705,7 +11705,7 @@ while true; do
   main_menu
   if [[ -n "$RUN_OUTPUT_DIR" ]] && [[ -n "$(find "$RUN_OUTPUT_DIR" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null)" ]]; then
     echo
-    read -r -p "Save report? [y/N]: " _save_choice
+    read -r -p "  Save report? [y/N]: " _save_choice
     if [[ "$_save_choice" == "y" || "$_save_choice" == "Y" ]]; then
       finalize_run
     else
