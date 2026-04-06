@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.206"
+APP_VERSION="v1.2.207"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -2349,8 +2349,8 @@ PYEOF
             printf "  ${red}Delete results for tasks: %s?${reset}\n" "${selected_ids[*]}"
           fi
           local _del_confirm
-          read -r -p "  Type YES to confirm: " _del_confirm
-          if [[ "$_del_confirm" == "YES" ]]; then
+          read -r -p "  Type YES/yes to confirm: " _del_confirm
+          if [[ "${_del_confirm,,}" == "yes" ]]; then
             for task_id in "${selected_ids[@]}"; do
               while IFS= read -r file_path; do
                 [[ -z "$file_path" ]] && continue
