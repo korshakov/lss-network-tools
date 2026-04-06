@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.225"
+APP_VERSION="v1.2.226"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -11325,6 +11325,8 @@ main_menu() {
     printf "  ${cyan}──────────────────────────────────────────────────${reset}\n"
     printf "  ${bold}000)${reset}  %s\n" "$(task_title "000")"
     printf "    ${bold}0)${reset}  Back\n"
+    echo
+    printf "  ${cyan}Tip: select multiple tasks using commas or ranges, e.g. 1,3 or 1-5 or 1-3,5,8-10${reset}\n"
     echo
     read -r -p "  Enter selection: " choice
 
