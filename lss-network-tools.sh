@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.227"
+APP_VERSION="v1.2.228"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -11281,6 +11281,11 @@ show_multi_task_summary() {
         return 0
         ;;
       4)
+        # Delete all run data — nothing is kept
+        if [[ -n "$RUN_OUTPUT_DIR" && -d "$RUN_OUTPUT_DIR" ]]; then
+          rm -rf "$RUN_OUTPUT_DIR" 2>/dev/null || true
+          RUN_OUTPUT_DIR=""
+        fi
         _GOTO_MAIN_MENU=true
         return 0
         ;;
