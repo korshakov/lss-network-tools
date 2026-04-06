@@ -47,6 +47,8 @@ RUN_CLIENT_SLUG / RUN_LOCATION_SLUG / RUN_NOTE_SLUG   # sanitized versions
 RUN_REPORT_FILE      # .txt report path
 SESSION_DEBUG_LOG    # temp debug capture
 NETWORK_INTERRUPTED  # true if interface dropped mid-run
+_LSS_STATUS_MSG      # one-shot status shown in startup_menu after update check or relaunch
+_LSS_UPDATE_BANNER   # set when a newer version is available; shown in startup_menu header
 ```
 
 Mode flags (0/1): `DEBUG_MODE`, `UPDATE_MODE`, `VERSION_MODE`, `BUILD_WIFI_HELPER_MODE`, `WRITE_COMPLETIONS_MODE`, `INSTALL_DEPS_MODE`, `UNINSTALL_MODE`
@@ -185,7 +187,11 @@ Every dependency must be handled at all four stages:
 
 **Preserved during update:** `output/`, `raw/`, `tmp/`, `install.env`, `assets/` (macOS also preserves these).
 
-Update helper sequence: rm old files → cp new files → `--install-deps` → merge assets → `--build-wifi-helper` → `--write-completions` → verify version → log → relaunch.
+Update helper sequence: rm old files → cp new files → `--install-deps` (to /dev/null) → merge assets → `--build-wifi-helper` → `--write-completions` → verify version → log → write `/tmp/.lss-last-update` → relaunch.
+
+**Post-update status message:** The heredoc writes `echo "$remote_tag" > /tmp/.lss-last-update` before `exec`ing the relaunch. On next startup, `startup_menu()` reads this file, sets `_LSS_STATUS_MSG="Updated successfully to vX.Y.Z"`, deletes the file, and displays the message on first render (one-shot). This is necessary because `exec` starts a new process — shell variables cannot survive across it.
+
+**curl during download:** `download_tag_zipball()` uses `curl -s` (silent) to suppress the progress meter. A `printf "  Downloading %s...\n"` line is printed before the curl call instead.
 
 ---
 
@@ -207,15 +213,41 @@ python3 ... 2>/dev/null || true  # Python subprocess failures don't exit script
 
 ---
 
+## UI / Display Conventions
+
+**2-space indent rule:** All user-visible CLI output uses a 2-space indent prefix. Every `printf` or `echo` with text content in menu/display functions must start with `  `. Blank `echo` lines are fine without. This applies to: `startup_menu`, `main_menu`, `check_tools`, `about_and_health`, `manage_results_for_run_dir`, `continue_run_from_dir`, `select_interface`, `initialize_run_context`, `check_for_updates`, `perform_installed_update`, and all interactive/display functions.
+
+**Task output indenting:** The 19 task functions themselves do NOT use the 2-space prefix internally — they output flush-left. `run_task_with_results_output()` wraps each task run by redirecting stdout through an awk indenter:
+
+```bash
+exec 8>&1
+exec 1> >(awk '{print "  " $0; fflush()}' >&8)
+# ... run task ...
+exec 1>&8 8>&-
+```
+
+**Why `exec 8>&1` not `exec {varname}>&1`:** macOS ships bash 3.2; named fd assignment (`exec {var}>&1`) requires bash 4.1+. Always use fixed fd numbers (8 is used throughout).
+
+**Why no global awk redirect:** Spinner uses `\r` without newlines (awk buffers → spinner freezes); `clear` escape sequences get `  ` prepended (breaks clear); all existing `printf "  ..."` in menus would double-indent to 4 spaces.
+
+**`fflush()` in awk:** Required so interactive prompts inside tasks (Tasks 17, 19) appear immediately rather than buffering until newline.
+
+---
+
 ## Colour Variables
 
-Colours are declared **locally per function** — never global:
+Colours are declared **locally per function** — never global. Always declare all colours a function uses:
+
 ```bash
 local red='\033[0;31m'
 local green='\033[0;32m'
 local yellow='\033[1;33m'
+local cyan='\033[0;36m'
+local bold='\033[1m'
 local reset='\033[0m'
 ```
+
+Only declare the colours actually used in that function. Bug history: `check_continue_run_network()` and `wireless_site_survey()` were missing `cyan`/`bold` declarations — variables silently expanded to empty string (no colour, no error).
 
 ---
 
@@ -257,11 +289,43 @@ Report file:
 
 ---
 
+## Manage Previous Runs / Manage Results
+
+**`manage_previous_runs()`** — lists past run directories, lets user select one.
+
+**`manage_results_for_run_dir(run_dir)`** — per-run action menu with options:
+- **Continue Run** — calls `continue_run_from_dir()` after network check (`load_run_metadata_from_dir` + `check_continue_run_network`). Saves/restores `SELECTED_INTERFACE` around the network check.
+- **Manage Results** — lists completed task JSON files; selecting one opens a sub-menu:
+  - **1) View Results** — pretty-prints the JSON
+  - **2) Edit Results** — field-by-field editor; works on a temp copy (`mktemp`), only writes back on save; entering `0` at any field cancels without saving
+  - **000) Delete This Result** — red destructive option; requires typing `YES` or `yes` to confirm (`${var,,}` lowercase expansion)
+- **000) Delete This Run** — deletes entire run directory; requires `YES`/`yes` confirmation
+
+**Network check in Manage Results:** Before running a task from results viewer, `load_run_metadata_from_dir` must be called first (populates stored gateway/network), then `check_continue_run_network`. `SELECTED_INTERFACE` is saved before and restored after to avoid clobbering the active session interface.
+
+---
+
 ## Menus
 
 **`startup_menu()`:** Run / Manage Previous Runs / Check For Updates / About & Install Health / Exit
 
-**`main_menu()`:** Lists all 19 tasks + `000` for complete audit + `0` back. Task number typed = task ID passed to `run_task_by_id()`.
+On each render: checks `/tmp/.lss-last-update` (post-update marker) → sets `_LSS_STATUS_MSG` → deletes file. Displays `_LSS_UPDATE_BANNER` if a newer version is available. Displays `_LSS_STATUS_MSG` one-shot then clears it.
+
+**`main_menu()`:** Lists all 19 tasks + `000` for complete audit + `0` back. Task number typed = task ID passed to `run_task_by_id()` via `run_task_with_results_output()`.
+
+---
+
+## check_tools() Output Format
+
+`check_tools()` runs at startup (after `clear_screen_if_supported`). All output uses 2-space indent. All required and optional deps are listed under a single "Dependency Checklist:" heading — no sub-sections for optional tools. Status tags use fixed-width padding so content columns align:
+
+```
+  [OK]      tool-name          ← 6 spaces after [OK]
+  [WARN]    message            ← 4 spaces after [WARN]
+  [MISSING] tool-name          ← 1 space after [MISSING]
+```
+
+Same padding convention used in `about_and_health()`.
 
 ---
 
