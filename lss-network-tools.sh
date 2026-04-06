@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.209"
+APP_VERSION="v1.2.210"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -770,8 +770,8 @@ rm -f "\$HELPER_SCRIPT"
 echo "$remote_tag" > /tmp/.lss-last-update
 echo
 echo "  Update applied successfully. Installed Version: $remote_tag"
-echo "  Relaunching ${APP_NAME}..."
-sleep 1
+echo
+read -r -p "  Press Enter to relaunch..." _
 if [[ "\$(id -u)" -eq 0 ]]; then
   exec "$INSTALL_WRAPPER_PATH"
 else
