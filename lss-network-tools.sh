@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.192"
+APP_VERSION="v1.2.193"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -2129,31 +2129,35 @@ PYEOF
           local _run_ans
           read -r -p "  Run it now? [y/N]: " _run_ans
           if [[ "$_run_ans" =~ ^[Yy]$ ]]; then
+            # Load run metadata (sets SELECTED_INTERFACE from manifest)
+            local _prev_iface="${SELECTED_INTERFACE:-}"
+            load_run_metadata_from_dir "$run_dir"
             # Check we're on the same network as the original run
             local _net_check=0
             check_continue_run_network "$run_dir" || _net_check=$?
-            [[ "${_GOTO_MAIN_MENU:-false}" == "true" ]] && return
+            if [[ "${_GOTO_MAIN_MENU:-false}" == "true" ]]; then
+              SELECTED_INTERFACE="$_prev_iface"
+              return
+            fi
             if [[ "$_net_check" -ne 0 ]]; then
               echo ""
               printf "  \033[0;31m\033[1mWARNING:\033[0m Network mismatch — returning to task list.\n"
               sleep 5
+              SELECTED_INTERFACE="$_prev_iface"
               valid=false
               break
-            fi
-            # Restore interface from the run's stored network info
-            local _iface_json="$run_dir/interface-network-info.json"
-            if [[ -f "$_iface_json" ]]; then
-              local _restored_iface
-              _restored_iface="$(jq -r '.interface // empty' "$_iface_json" 2>/dev/null)"
-              [[ -n "$_restored_iface" ]] && SELECTED_INTERFACE="$_restored_iface"
             fi
             if [[ -z "${SELECTED_INTERFACE:-}" ]]; then
               echo "  Could not determine interface from this run."
               sleep 1
             else
               run_task_with_results_output "$c" "$_t_title" || true
-              [[ "${_GOTO_MAIN_MENU:-false}" == "true" ]] && return
+              if [[ "${_GOTO_MAIN_MENU:-false}" == "true" ]]; then
+                SELECTED_INTERFACE="$_prev_iface"
+                return
+              fi
             fi
+            SELECTED_INTERFACE="$_prev_iface"
           fi
           valid=false
           break
@@ -10707,7 +10711,7 @@ run_task_with_results_output() {
   printf "  ${cyan}──────────────────────────────────────────────────${reset}\n"
   echo
   SHOW_FUNCTION_HEADER=0
-  TASK_OUTPUT_INDENT="  "
+  TASK_OUTPUT_INDENT=""
   if ! run_task_by_id "$func_id"; then
     SHOW_FUNCTION_HEADER=1
     TASK_OUTPUT_INDENT=""
