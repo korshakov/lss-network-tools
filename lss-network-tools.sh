@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.196"
+APP_VERSION="v1.2.197"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -2291,7 +2291,7 @@ PYEOF
                 printf "  ${yellow}${bold}Edit Task %s — %s${reset}\n" "$task_id" "$title"
               fi
               printf "  ${cyan}──────────────────────────────────────────────────${reset}\n"
-              printf "  Press Enter to keep current value.  Enter 0 to exit without saving.\n"
+              printf "  Press Enter to skip a field.  Enter 0 to exit without saving.\n"
               echo
               local _tmp_copy _edit_cancelled=false
               _tmp_copy="$(mktemp /tmp/lss-edit-copy-XXXXXX.json)"
@@ -2299,7 +2299,7 @@ PYEOF
               local _key _val _new_val
               while IFS=$'\t' read -r _key _val; do
                 printf "  ${bold}%-28s${reset} %s\n" "${_key}:" "${_val}"
-                read -r -p "  New value: " _new_val </dev/tty
+                read -r -p "  New value (Enter to skip): " _new_val </dev/tty
                 if [[ "$_new_val" == "0" ]]; then
                   _edit_cancelled=true
                   break
