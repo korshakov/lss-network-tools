@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.219"
+APP_VERSION="v1.2.220"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -11080,6 +11080,53 @@ run_task_exists() {
   return 1
 }
 
+# Parse a multi-task selection string like "1,3-5,7" into an ordered list of
+# valid unique task IDs. Prints the IDs space-separated on stdout.
+# Returns 1 if any part of the input is invalid.
+expand_task_selection() {
+  local input="$1"
+  local -a result=()
+  local -A seen=()
+  local part start end id
+
+  IFS=',' read -ra parts <<< "$input"
+  for part in "${parts[@]}"; do
+    part="${part// /}"  # strip spaces
+    if [[ "$part" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+      start="${BASH_REMATCH[1]}"
+      end="${BASH_REMATCH[2]}"
+      if [[ "$start" -gt "$end" ]]; then
+        printf "  Invalid range: %s-%s\n" "$start" "$end" >&2
+        return 1
+      fi
+      for (( id=start; id<=end; id++ )); do
+        if ! run_task_exists "$id"; then
+          printf "  Unknown task: %s\n" "$id" >&2
+          return 1
+        fi
+        if [[ -z "${seen[$id]+x}" ]]; then
+          result+=("$id")
+          seen[$id]=1
+        fi
+      done
+    elif [[ "$part" =~ ^[0-9]+$ ]]; then
+      if ! run_task_exists "$part"; then
+        printf "  Unknown task: %s\n" "$part" >&2
+        return 1
+      fi
+      if [[ -z "${seen[$part]+x}" ]]; then
+        result+=("$part")
+        seen[$part]=1
+      fi
+    else
+      printf "  Invalid input: %s\n" "$part" >&2
+      return 1
+    fi
+  done
+
+  echo "${result[*]}"
+}
+
 run_task_by_id() {
   case "$1" in
     1) interface_info "$SELECTED_INTERFACE" ;;
@@ -11246,14 +11293,30 @@ main_menu() {
       0) return 0 ;;
       *)
         if [[ "$choice" =~ ^[0-9]+$ ]] && run_task_exists "$choice"; then
+          # Single task
           title="$(task_title "$choice")"
-          if [[ -z "$title" ]]; then
-            title="Function $choice"
-          fi
+          [[ -z "$title" ]] && title="Function $choice"
           run_task_with_results_output "$choice" "$title" || true
           [[ "${_GOTO_MAIN_MENU:-false}" == "true" ]] && return 0
+        elif [[ "$choice" =~ [,\-] ]]; then
+          # Multi-task selection: "1,3,5" or "1-5" or "1,3-5,7"
+          local _multi_ids _id _multi_title
+          if ! _multi_ids="$(expand_task_selection "$choice" 2>&1)"; then
+            printf "%s\n" "$_multi_ids"
+            printf "  Invalid selection. Try again.\n"
+            sleep 1
+          else
+            read -r -a _multi_id_arr <<< "$_multi_ids"
+            for _id in "${_multi_id_arr[@]}"; do
+              _multi_title="$(task_title "$_id")"
+              [[ -z "$_multi_title" ]] && _multi_title="Function $_id"
+              run_task_with_results_output "$_id" "$_multi_title" || true
+              if [[ "${_GOTO_MAIN_MENU:-false}" == "true" ]]; then return 0; fi
+            done
+          fi
         else
           printf "  Invalid selection. Try again.\n"
+          sleep 1
         fi
         ;;
     esac
