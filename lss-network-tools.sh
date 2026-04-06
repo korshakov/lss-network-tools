@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.190"
+APP_VERSION="v1.2.191"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -658,10 +658,8 @@ perform_installed_update() {
     return 1
   fi
 
-  echo "Current Version: ${APP_VERSION}"
-  echo "Latest Available Tag: ${remote_tag}"
   echo
-  read -r -p "Install update ${remote_tag}? [y/N]: " confirmation
+  read -r -p "  Install update ${remote_tag}? [y/N]: " confirmation
   if [[ ! "$confirmation" =~ ^[Yy]$ ]]; then
     echo "Update cancelled."
     return 0
