@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.220"
+APP_VERSION="v1.2.221"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -11397,6 +11397,7 @@ trap handle_err_exit ERR
 if [[ "$OS" == "macos" ]] && command -v caffeinate >/dev/null 2>&1; then
   caffeinate -d -i -s -w $$ &
   CAFFEINATE_PID=$!
+  disown "$CAFFEINATE_PID" 2>/dev/null || true
 fi
 
 # Quick synchronous update check (3s timeout) — result stored in variable
