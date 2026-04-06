@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.199"
+APP_VERSION="v1.2.200"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -10888,12 +10888,12 @@ run_task_with_results_output() {
   # Redirect task stdout through a 2-space indenter so all task output aligns
   # with the header. awk fflush() ensures line-buffered output so interactive
   # prompts in tasks still appear in the correct order.
-  local _real_stdout
-  exec {_real_stdout}>&1
-  exec 1> >(awk '{print "  " $0; fflush()}' >&"${_real_stdout}")
+  # Uses fd 8 (fixed number for bash 3.x compatibility).
+  exec 8>&1
+  exec 1> >(awk '{print "  " $0; fflush()}' >&8)
 
   if ! run_task_by_id "$func_id"; then
-    exec 1>&"${_real_stdout}" {_real_stdout}>&-
+    exec 1>&8 8>&-
     SHOW_FUNCTION_HEADER=1
     TASK_OUTPUT_INDENT=""
     echo
@@ -10903,7 +10903,7 @@ run_task_with_results_output() {
     return 1
   fi
 
-  exec 1>&"${_real_stdout}" {_real_stdout}>&-
+  exec 1>&8 8>&-
   SHOW_FUNCTION_HEADER=1
   TASK_OUTPUT_INDENT=""
   echo
