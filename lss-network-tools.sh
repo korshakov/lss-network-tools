@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.218"
+APP_VERSION="v1.2.219"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -4528,69 +4528,266 @@ enrich_dns_resolution() {
   [[ "${#dns_ips[@]}" -eq 0 ]] && return 0
 
   local bold='\033[1m'
+  local green='\033[0;32m'
+  local red='\033[0;31m'
+  local yellow='\033[1;33m'
   local reset='\033[0m'
-  printf "${bold}Resolution test (google.com):${reset}\n"
-  echo
-  local tmp_py
-  tmp_py="$(mktemp /tmp/lss-dns-test-XXXXXX)"
-  cat > "$tmp_py" << 'PYEOF'
-import sys, socket, time, struct, random, json
 
-def dns_query(server_ip, domain, timeout=3):
+  # Get gateway IP for PTR test
+  local gateway_ip
+  gateway_ip="$(get_gateway_ip "$SELECTED_INTERFACE" 2>/dev/null || true)"
+
+  local tmp_py
+  tmp_py="$(mktemp /tmp/lss-dns-test-XXXXXX.py)"
+  cat > "$tmp_py" << 'PYEOF'
+import sys, socket, time, struct, random, json, ipaddress
+
+PRIVATE_RANGES = [
+    ipaddress.ip_network('10.0.0.0/8'),
+    ipaddress.ip_network('172.16.0.0/12'),
+    ipaddress.ip_network('192.168.0.0/16'),
+    ipaddress.ip_network('127.0.0.0/8'),
+    ipaddress.ip_network('169.254.0.0/16'),
+]
+
+def is_private(ip_str):
+    try:
+        addr = ipaddress.ip_address(ip_str)
+        return any(addr in net for net in PRIVATE_RANGES)
+    except Exception:
+        return False
+
+def build_query(domain, qtype=1):
     txid = random.randint(0, 65535)
     header = struct.pack('!HHHHHH', txid, 0x0100, 1, 0, 0, 0)
     question = b''
     for label in domain.split('.'):
         e = label.encode()
         question += bytes([len(e)]) + e
-    question += b'\x00' + struct.pack('!HH', 1, 1)
+    question += b'\x00' + struct.pack('!HH', qtype, 1)
+    return txid, header + question
+
+def send_recv(server_ip, pkt, timeout=3):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(timeout)
     try:
         start = time.time()
-        sock.sendto(header + question, (server_ip, 53))
+        sock.sendto(pkt, (server_ip, 53))
         data, _ = sock.recvfrom(512)
         elapsed = round((time.time() - start) * 1000, 1)
-        rcode = struct.unpack('!H', data[2:4])[0] & 0x000F
-        ancount = struct.unpack('!H', data[6:8])[0]
-        return (rcode == 0 and ancount > 0), elapsed
+        return data, elapsed
     except Exception:
-        return False, None
+        return None, None
     finally:
         sock.close()
 
+def parse_a_records(data):
+    """Extract A record IPs from a DNS response."""
+    ips = []
+    try:
+        ancount = struct.unpack('!H', data[6:8])[0]
+        if ancount == 0:
+            return ips
+        # Skip header (12 bytes) + question section
+        pos = 12
+        # Skip question: read qname then qtype+qclass (4 bytes)
+        while pos < len(data) and data[pos] != 0:
+            if data[pos] & 0xc0 == 0xc0:
+                pos += 2
+                break
+            pos += data[pos] + 1
+        else:
+            pos += 1
+        pos += 4  # qtype + qclass
+        # Parse answer records
+        for _ in range(ancount):
+            if pos >= len(data):
+                break
+            # Skip name (handle compression)
+            if data[pos] & 0xc0 == 0xc0:
+                pos += 2
+            else:
+                while pos < len(data) and data[pos] != 0:
+                    pos += data[pos] + 1
+                pos += 1
+            if pos + 10 > len(data):
+                break
+            rtype, rclass, ttl, rdlen = struct.unpack('!HHIH', data[pos:pos+10])
+            pos += 10
+            if rtype == 1 and rdlen == 4:  # A record
+                ips.append(socket.inet_ntoa(data[pos:pos+4]))
+            pos += rdlen
+    except Exception:
+        pass
+    return ips
+
+def parse_ptr(data):
+    """Extract PTR name from a DNS response."""
+    try:
+        ancount = struct.unpack('!H', data[6:8])[0]
+        if ancount == 0:
+            return None
+        pos = 12
+        while pos < len(data) and data[pos] != 0:
+            if data[pos] & 0xc0 == 0xc0:
+                pos += 2
+                break
+            pos += data[pos] + 1
+        else:
+            pos += 1
+        pos += 4
+        # Answer record
+        if data[pos] & 0xc0 == 0xc0:
+            pos += 2
+        else:
+            while pos < len(data) and data[pos] != 0:
+                pos += data[pos] + 1
+            pos += 1
+        rtype, rclass, ttl, rdlen = struct.unpack('!HHIH', data[pos:pos+10])
+        pos += 10
+        if rtype == 12:  # PTR
+            labels = []
+            end = pos + rdlen
+            p = pos
+            while p < end and data[p] != 0:
+                if data[p] & 0xc0 == 0xc0:
+                    ptr = struct.unpack('!H', data[p:p+2])[0] & 0x3fff
+                    p2 = ptr
+                    while p2 < len(data) and data[p2] != 0:
+                        labels.append(data[p2+1:p2+1+data[p2]].decode(errors='replace'))
+                        p2 += data[p2] + 1
+                    break
+                labels.append(data[p+1:p+1+data[p]].decode(errors='replace'))
+                p += data[p] + 1
+            return '.'.join(labels) if labels else None
+    except Exception:
+        return None
+
+def ptr_name(ip):
+    parts = ip.split('.')
+    return '.'.join(reversed(parts)) + '.in-addr.arpa'
+
+servers = sys.argv[1:]
+gateway = sys.argv[-1] if len(sys.argv) > 1 else None
+# argv: server_ips... gateway_ip  (gateway is last, always passed)
+# Separate: first N-1 are DNS servers, last is gateway
+dns_servers = sys.argv[1:-1]
+gateway_ip  = sys.argv[-1] if sys.argv[-1] != '' else None
+
 results = []
-for ip in sys.argv[1:]:
-    resolved, ms = dns_query(ip, 'google.com')
-    results.append({'ip': ip, 'resolved': resolved, 'response_ms': ms})
+for server_ip in dns_servers:
+    # 1. External resolution test (google.com A)
+    txid, pkt = build_query('google.com', 1)
+    data, ms = send_recv(server_ip, pkt)
+    resolved = False
+    resolved_ips = []
+    rebinding_risk = False
+    open_resolver = False
+    if data is not None:
+        rcode = struct.unpack('!H', data[2:4])[0] & 0x000F
+        ancount = struct.unpack('!H', data[6:8])[0]
+        if rcode == 0 and ancount > 0:
+            resolved = True
+            open_resolver = True
+            resolved_ips = parse_a_records(data)
+            rebinding_risk = any(is_private(ip) for ip in resolved_ips)
+
+    # 2. PTR lookup for the DNS server itself
+    txid2, pkt2 = build_query(ptr_name(server_ip), 12)
+    data2, _ = send_recv(server_ip, pkt2)
+    ptr_hostname = parse_ptr(data2) if data2 else None
+
+    # 3. Gateway PTR lookup
+    gateway_ptr = None
+    if gateway_ip and gateway_ip != '':
+        txid3, pkt3 = build_query(ptr_name(gateway_ip), 12)
+        data3, _ = send_recv(server_ip, pkt3)
+        gateway_ptr = parse_ptr(data3) if data3 else None
+
+    results.append({
+        'ip':             server_ip,
+        'resolved':       resolved,
+        'response_ms':    ms,
+        'resolved_ips':   resolved_ips,
+        'open_resolver':  open_resolver,
+        'rebinding_risk': rebinding_risk,
+        'ptr_hostname':   ptr_hostname,
+        'gateway_ptr':    gateway_ptr,
+    })
+
 print(json.dumps(results))
 PYEOF
 
   local result_json
-  result_json="$(python3 "$tmp_py" "${dns_ips[@]}" 2>/dev/null || echo '[]')"
+  result_json="$(python3 "$tmp_py" "${dns_ips[@]}" "${gateway_ip:-}" 2>/dev/null || echo '[]')"
   rm -f "$tmp_py"
+
+  printf "${bold}DNS Server Tests:${reset}\n"
+  echo
 
   local idx=0
   for ip in "${dns_ips[@]}"; do
-    local resolved ms
-    resolved="$(printf '%s' "$result_json" | jq -r ".[$idx].resolved // false" 2>/dev/null)"
-    ms="$(printf '%s' "$result_json" | jq -r ".[$idx].response_ms // \"null\"" 2>/dev/null)"
+    local resolved ms open_resolver rebinding ptr gateway_ptr
+    resolved="$(    printf '%s' "$result_json" | jq -r ".[$idx].resolved       // false"  2>/dev/null)"
+    ms="$(          printf '%s' "$result_json" | jq -r ".[$idx].response_ms    // \"null\""  2>/dev/null)"
+    open_resolver="$(printf '%s' "$result_json" | jq -r ".[$idx].open_resolver // false"  2>/dev/null)"
+    rebinding="$(   printf '%s' "$result_json" | jq -r ".[$idx].rebinding_risk // false"  2>/dev/null)"
+    ptr="$(         printf '%s' "$result_json" | jq -r ".[$idx].ptr_hostname   // \"\""   2>/dev/null)"
+    gateway_ptr="$( printf '%s' "$result_json" | jq -r ".[$idx].gateway_ptr   // \"\""   2>/dev/null)"
+
+    printf "  ${bold}%-16s${reset}\n" "$ip"
+    [[ -n "$ptr" ]] && printf "    Hostname:       %s\n" "$ptr"
     if [[ "$resolved" == "true" ]]; then
-      printf "  ${bold}%-16s${reset}  OK  (%s ms)\n" "$ip" "$ms"
+      printf "    External DNS:   ${green}OK${reset} (%s ms)\n" "$ms"
     else
-      printf "  ${bold}%-16s${reset}  FAILED\n" "$ip"
+      printf "    External DNS:   ${red}FAILED${reset}\n"
     fi
+    if [[ "$open_resolver" == "true" ]]; then
+      printf "    Open Resolver:  ${yellow}Yes${reset} — resolves external domains\n"
+    else
+      printf "    Open Resolver:  No\n"
+    fi
+    if [[ "$rebinding" == "true" ]]; then
+      printf "    Rebinding Risk: ${red}WARNING${reset} — external domain resolved to private IP\n"
+    else
+      printf "    Rebinding Risk: None detected\n"
+    fi
+    [[ -n "$gateway_ptr" ]] && printf "    Gateway PTR:    %s\n" "$gateway_ptr"
+    echo
+
     local ms_json="null"
     [[ "$ms" != "null" && -n "$ms" ]] && ms_json="$ms"
+    local resolved_ips_json
+    resolved_ips_json="$(printf '%s' "$result_json" | jq -c ".[$idx].resolved_ips // []" 2>/dev/null)"
+    local ptr_json="null"
+    [[ -n "$ptr" ]] && ptr_json="\"$ptr\""
+    local gptr_json="null"
+    [[ -n "$gateway_ptr" ]] && gptr_json="\"$gateway_ptr\""
+
     jq \
       --arg ip "$ip" \
       --argjson resolved "$([ "$resolved" == "true" ] && echo true || echo false)" \
       --argjson ms "$ms_json" \
-      '(.servers[] | select(.ip == $ip)) += {resolution_test: {domain: "google.com", resolved: $resolved, response_ms: $ms}}' \
+      --argjson open_resolver "$([ "$open_resolver" == "true" ] && echo true || echo false)" \
+      --argjson rebinding "$([ "$rebinding" == "true" ] && echo true || echo false)" \
+      --argjson resolved_ips "$resolved_ips_json" \
+      --argjson ptr "$ptr_json" \
+      --argjson gptr "$gptr_json" \
+      '(.servers[] | select(.ip == $ip)) += {
+        resolution_test: {
+          domain: "google.com",
+          resolved: $resolved,
+          response_ms: $ms,
+          resolved_ips: $resolved_ips,
+          open_resolver: $open_resolver,
+          rebinding_risk: $rebinding
+        },
+        ptr_hostname: $ptr,
+        gateway_ptr: $gptr
+      }' \
       "$json_file" > "$json_file.tmp" 2>/dev/null && mv "$json_file.tmp" "$json_file" || true
     idx=$(( idx + 1 ))
   done
-  echo
 }
 
 detect_dns_servers() {
@@ -8864,6 +9061,47 @@ PYEOF
   fi
   [[ -n "$server_ip_val" ]] && echo "DHCP Server: $server_ip_val"
 
+  # --- Subnet utilization estimate ---
+  local network prefix_len usable_hosts live_hosts util_pct util_json
+  local ind_util=false
+  network="$(get_interface_network_cidr "$iface" 2>/dev/null || true)"
+  usable_hosts="null"
+  live_hosts="null"
+  util_pct="null"
+  util_json='{"usable_hosts":null,"live_hosts":null,"utilization_percent":null,"high_utilization":false,"note":"subnet too large to scan quickly"}'
+
+  if [[ -n "$network" ]]; then
+    prefix_len="${network##*/}"
+    if [[ "$prefix_len" -ge 16 && "$prefix_len" -le 32 ]]; then
+      usable_hosts=$(( (1 << (32 - prefix_len)) - 2 ))
+      [[ "$usable_hosts" -lt 0 ]] && usable_hosts=0
+      echo "Subnet utilization: scanning $network for live hosts..."
+      live_hosts="$(nmap -sn -n "$network" 2>/dev/null | grep -c "Host is up" || true)"
+      live_hosts="${live_hosts:-0}"
+      if [[ "$usable_hosts" -gt 0 ]]; then
+        util_pct="$(awk "BEGIN{printf \"%.1f\", $live_hosts / $usable_hosts * 100}")"
+        echo "Live Hosts:  $live_hosts / $usable_hosts usable (${util_pct}%)"
+        if awk "BEGIN{exit !($util_pct >= 80)}"; then
+          warnings+=("DHCP pool utilization is high: ${util_pct}% of usable addresses have live hosts (${live_hosts}/${usable_hosts}). Pool exhaustion risk — consider expanding the subnet or reclaiming stale leases.")
+          ind_util=true
+        elif awk "BEGIN{exit !($util_pct >= 60)}"; then
+          warnings+=("DHCP pool utilization is moderate: ${util_pct}% of usable addresses have live hosts (${live_hosts}/${usable_hosts}). Monitor for growth.")
+          ind_util=true
+        fi
+        util_json="$(jq -n \
+          --argjson usable "$usable_hosts" \
+          --argjson live "$live_hosts" \
+          --arg pct "$util_pct" \
+          --argjson high "$ind_util" \
+          '{usable_hosts:$usable,live_hosts:$live,utilization_percent:($pct|tonumber),high_utilization:$high,note:"estimated from nmap ping scan; reflects responding hosts, not actual DHCP lease count"}')"
+      else
+        util_json='{"usable_hosts":0,"live_hosts":null,"utilization_percent":null,"high_utilization":false,"note":"subnet too small to estimate"}'
+      fi
+    else
+      echo "Subnet utilization: skipped (subnet /$prefix_len is too large to scan quickly)"
+    fi
+  fi
+
   local ind_slow=false ind_loss=false
 
   if [[ "$responded_count" -eq 0 ]]; then
@@ -8924,8 +9162,10 @@ PYEOF
     --arg server_ip "$server_ip_val" \
     --argjson ind_slow "$ind_slow" \
     --argjson ind_loss "$ind_loss" \
+    --argjson ind_util "$ind_util" \
     --argjson is_wifi "$is_wifi" \
     --argjson warnings "$warnings_json" \
+    --argjson util "$util_json" \
     '{
       status:               $status,
       success:              $success,
@@ -8942,9 +9182,11 @@ PYEOF
       max_ms:               $max_ms,
       packet_loss_percent:  $loss,
       server_ip:            (if $server_ip == "" then null else $server_ip end),
+      subnet_utilization:   $util,
       indicators: {
-        slow_response: $ind_slow,
-        high_loss:     $ind_loss
+        slow_response:    $ind_slow,
+        high_loss:        $ind_loss,
+        high_utilization: $ind_util
       }
     }' > "$json_file"
 
@@ -9416,6 +9658,13 @@ render_dhcp_response_time_report() {
     printf "  %-${w}s %s\n" "Min Latency:"     "${min_ms} ms"
     printf "  %-${w}s %s\n" "Avg Latency:"     "${avg_ms} ms"
     printf "  %-${w}s %s\n" "Max Latency:"     "${max_ms} ms"
+    local util_live util_usable util_pct
+    util_live="$(  jq -r '.subnet_utilization.live_hosts // "N/A"'          "$file" 2>/dev/null)"
+    util_usable="$(jq -r '.subnet_utilization.usable_hosts // "N/A"'        "$file" 2>/dev/null)"
+    util_pct="$(   jq -r '.subnet_utilization.utilization_percent // "N/A"' "$file" 2>/dev/null)"
+    if [[ "$util_live" != "N/A" && "$util_live" != "null" ]]; then
+      printf "  %-${w}s %s\n" "Pool Utilization:" "${util_pct}%  (${util_live} of ${util_usable} usable addresses have live hosts)"
+    fi
     echo ""
     echo "  Per-Probe Results:"
     jq -r '.response_times_ms | to_entries[] | "    Probe \(.key + 1): " + (if .value == null then "no response" else (.value | tostring) + " ms" end)' "$file" 2>/dev/null || true
@@ -9451,10 +9700,13 @@ render_generic_network_scan_report() {
 
   if [[ "$label" == "DNS" ]]; then
     jq -r '.servers[]? |
-      "  - DNS Host \(.ip) | Ports: \((.open_ports // []) | map(tostring) | join(", ")) | google.com: \(
-        if .resolution_test then
-          (if .resolution_test.resolved then "OK (" + ((.resolution_test.response_ms // "?") | tostring) + " ms)" else "FAILED" end)
-        else "not tested" end)"' "$file" >> "$report_file"
+      "  - DNS Host \(.ip)" +
+      (if .ptr_hostname then " (\(.ptr_hostname))" else "" end) +
+      " | Ports: \((.open_ports // []) | map(tostring) | join(", "))" +
+      " | External DNS: \(if .resolution_test then (if .resolution_test.resolved then "OK (" + ((.resolution_test.response_ms // "?") | tostring) + " ms)" else "FAILED" end) else "not tested" end)" +
+      (if .resolution_test.open_resolver then " | Open Resolver: Yes" else "" end) +
+      (if .resolution_test.rebinding_risk then " | REBINDING RISK: resolved external domain to private IP" else "" end) +
+      (if .gateway_ptr then " | Gateway PTR: \(.gateway_ptr)" else "" end)' "$file" >> "$report_file"
   else
     jq -r --arg lbl "$label" '.servers[]? | "  - \($lbl) Host \(.ip) | Open Ports: \((.open_ports // []) | if length > 0 then map(tostring) | join(", ") else "none found" end) | Services: \((.detected_services // []) | if length > 0 then join(", ") else "unknown" end)"' "$file" >> "$report_file"
   fi
