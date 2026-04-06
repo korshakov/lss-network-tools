@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.235"
+APP_VERSION="v1.2.236"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -11607,7 +11607,7 @@ PYEOF
     echo
     printf "  ${cyan}──────────────────────────────────────────────────${reset}\n"
     printf "  ${bold}000)${reset}  %s\n" "$(task_title "000")"
-    printf "    ${bold}0)${reset}  Back\n"
+    printf "    ${bold}0)${reset}  Save / Exit Options\n"
     echo
     printf "  ${cyan}Tip: select multiple tasks using commas or ranges, e.g. 1,3 or 1-5 or 1-3,5,8-10${reset}\n"
     echo
@@ -11627,7 +11627,21 @@ PYEOF
         echo
         [[ "${_GOTO_MAIN_MENU:-false}" == "true" ]] && return 0
         ;;
-      0) return 0 ;;
+      0)
+        # Build list of tasks completed so far in this session
+        local _ran_ids="" _tid
+        for _tid in "${task_ids[@]}"; do
+          if [[ -n "$(task_json_files "$_tid")" ]]; then
+            _ran_ids="$_ran_ids $_tid"
+          fi
+        done
+        _ran_ids="${_ran_ids# }"
+        if [[ -z "$_ran_ids" ]]; then
+          return 0
+        fi
+        show_multi_task_summary "$_ran_ids"
+        [[ "${_GOTO_MAIN_MENU:-false}" == "true" ]] && return 0
+        ;;
       *)
         if [[ "$choice" =~ ^[0-9]+$ ]] && run_task_exists "$choice"; then
           # Single task
