@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.183"
+APP_VERSION="v1.2.184"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -5344,16 +5344,17 @@ render_speed_test_report() {
   fi
 
   {
-    echo "Status: ${status:-unknown}"
-    [[ -n "$error_code" ]]    && echo "Error Code: $error_code"
-    [[ -n "$error_message" ]] && echo "Error Message: $error_message"
-    [[ -n "$warning_count" && "$warning_count" != "0" ]] && echo "Warnings: $warning_count"
-    echo "Public IP: ${public_ip:-unknown}"
-    [[ -n "$isp_name" ]] && echo "ISP: ${isp_name}"
-    echo "Connected to server: ${server:-unknown}"
-    echo "Ping: ${ping:-unavailable} ms"
-    echo "Download Speed: ${download:-unavailable}"
-    echo "Upload Speed: ${upload:-unavailable}"
+    local w=22
+    printf "  %-${w}s %s\n" "Status:"               "${status:-unknown}"
+    [[ -n "$error_code" ]]    && printf "  %-${w}s %s\n" "Error Code:"    "$error_code"
+    [[ -n "$error_message" ]] && printf "  %-${w}s %s\n" "Error Message:" "$error_message"
+    [[ -n "$warning_count" && "$warning_count" != "0" ]] && printf "  %-${w}s %s\n" "Warnings:" "$warning_count"
+    printf "  %-${w}s %s\n" "Public IP:"             "${public_ip:-unknown}"
+    [[ -n "$isp_name" ]] && printf "  %-${w}s %s\n" "ISP:" "$isp_name"
+    printf "  %-${w}s %s\n" "Connected to server:"   "${server:-unknown}"
+    printf "  %-${w}s %s\n" "Ping:"                  "${ping:-unavailable} ms"
+    printf "  %-${w}s %s\n" "Download Speed:"        "${download:-unavailable}"
+    printf "  %-${w}s %s\n" "Upload Speed:"          "${upload:-unavailable}"
   } >> "$report_file"
 }
 
@@ -8753,22 +8754,17 @@ render_interface_info_report() {
   mac="$(jq -r '.mac_address // "unknown"' "$file" 2>/dev/null)"
 
   {
-    echo "Status: ${status:-unknown}"
-    if [[ -n "$error_code" ]]; then
-      echo "Error Code: $error_code"
-    fi
-    if [[ -n "$error_message" ]]; then
-      echo "Error Message: $error_message"
-    fi
-    if [[ -n "$warning_count" && "$warning_count" != "0" ]]; then
-      echo "Warnings: $warning_count"
-    fi
-    echo "Interface: ${iface:-unknown}"
-    echo "IP Address: ${ip:-unknown}"
-    echo "Subnet Mask: ${subnet:-unknown}"
-    echo "Network Range: ${network:-unknown}"
-    echo "Gateway: ${gateway:-unknown}"
-    echo "MAC Address: ${mac:-unknown}"
+    local w=16
+    printf "  %-${w}s %s\n" "Status:"        "${status:-unknown}"
+    [[ -n "$error_code" ]]    && printf "  %-${w}s %s\n" "Error Code:"    "$error_code"
+    [[ -n "$error_message" ]] && printf "  %-${w}s %s\n" "Error Message:" "$error_message"
+    [[ -n "$warning_count" && "$warning_count" != "0" ]] && printf "  %-${w}s %s\n" "Warnings:" "$warning_count"
+    printf "  %-${w}s %s\n" "Interface:"     "${iface:-unknown}"
+    printf "  %-${w}s %s\n" "IP Address:"    "${ip:-unknown}"
+    printf "  %-${w}s %s\n" "Subnet Mask:"   "${subnet:-unknown}"
+    printf "  %-${w}s %s\n" "Network Range:" "${network:-unknown}"
+    printf "  %-${w}s %s\n" "Gateway:"       "${gateway:-unknown}"
+    printf "  %-${w}s %s\n" "MAC Address:"   "${mac:-unknown}"
   } >> "$report_file"
 }
 
@@ -8786,34 +8782,25 @@ render_gateway_report() {
   gateway="$(jq -r '.gateway_ip // "unknown"' "$file" 2>/dev/null)"
   ports="$(jq -r '(.open_ports // []) | map(tostring) | join(", ")' "$file" 2>/dev/null)"
 
+  local w=16
   if [[ "$status" == "skipped" ]]; then
     local skip_message
     skip_message="$(jq -r '.skip_message // "Scan was skipped."' "$file" 2>/dev/null)"
     {
-      echo "Status: skipped"
-      echo "Gateway IP: ${gateway:-unknown}"
-      echo "Reason: $skip_message"
+      printf "  %-${w}s %s\n" "Status:"     "skipped"
+      printf "  %-${w}s %s\n" "Gateway IP:" "${gateway:-unknown}"
+      printf "  %-${w}s %s\n" "Reason:"     "$skip_message"
     } >> "$report_file"
     return 0
   fi
 
   {
-    echo "Status: ${status:-unknown}"
-    if [[ -n "$error_code" ]]; then
-      echo "Error Code: $error_code"
-    fi
-    if [[ -n "$error_message" ]]; then
-      echo "Error Message: $error_message"
-    fi
-    if [[ -n "$warning_count" && "$warning_count" != "0" ]]; then
-      echo "Warnings: $warning_count"
-    fi
-    echo "Gateway IP: ${gateway:-unknown}"
-    if [[ -n "$ports" ]]; then
-      echo "Open Ports: $ports"
-    else
-      echo "Open Ports: none found"
-    fi
+    printf "  %-${w}s %s\n" "Status:"        "${status:-unknown}"
+    [[ -n "$error_code" ]]    && printf "  %-${w}s %s\n" "Error Code:"    "$error_code"
+    [[ -n "$error_message" ]] && printf "  %-${w}s %s\n" "Error Message:" "$error_message"
+    [[ -n "$warning_count" && "$warning_count" != "0" ]] && printf "  %-${w}s %s\n" "Warnings:" "$warning_count"
+    printf "  %-${w}s %s\n" "Gateway IP:"    "${gateway:-unknown}"
+    printf "  %-${w}s %s\n" "Open Ports:"    "${ports:-none found}"
   } >> "$report_file"
 }
 
@@ -8853,31 +8840,22 @@ render_gateway_stress_report() {
   slow_recovery="$(jq -r '.indicators.slow_recovery // false' "$file" 2>/dev/null)"
 
   {
-    echo "Status: ${status:-unknown}"
-    if [[ -n "$error_code" ]]; then
-      echo "Error Code: $error_code"
-    fi
-    if [[ -n "$error_message" ]]; then
-      echo "Error Message: $error_message"
-    fi
-    if [[ -n "$warning_count" && "$warning_count" != "0" ]]; then
-      echo "Warnings: $warning_count"
-    fi
-    echo "Gateway IP: ${gateway}"
-    echo "Interface: ${iface}"
-    echo "Completed With Warnings: ${completed_with_warnings}"
-    if [[ -n "$warning" ]]; then
-      echo "Warning: ${warning}"
-    fi
-    if [[ -n "$stage_status" ]]; then
-      echo "Stage Status: ${stage_status}"
-    fi
-    echo "Baseline Avg Latency: ${baseline_avg} ms"
-    echo "Sustained Avg Latency: ${sustained_avg} ms"
-    echo "High Jitter: ${high_jitter}"
-    echo "Latency Under Load: ${latency_under_load}"
-    echo "Packet Loss Detected: ${packet_loss}"
-    echo "Slow Recovery: ${slow_recovery}"
+    local w=26
+    printf "  %-${w}s %s\n" "Status:"                   "${status:-unknown}"
+    [[ -n "$error_code" ]]    && printf "  %-${w}s %s\n" "Error Code:"    "$error_code"
+    [[ -n "$error_message" ]] && printf "  %-${w}s %s\n" "Error Message:" "$error_message"
+    [[ -n "$warning_count" && "$warning_count" != "0" ]] && printf "  %-${w}s %s\n" "Warnings:" "$warning_count"
+    printf "  %-${w}s %s\n" "Gateway IP:"                "${gateway}"
+    printf "  %-${w}s %s\n" "Interface:"                 "${iface}"
+    printf "  %-${w}s %s\n" "Completed With Warnings:"   "${completed_with_warnings}"
+    [[ -n "$warning" ]]      && printf "  %-${w}s %s\n" "Warning:"       "$warning"
+    [[ -n "$stage_status" ]] && printf "  %-${w}s %s\n" "Stage Status:"  "$stage_status"
+    printf "  %-${w}s %s\n" "Baseline Avg Latency:"      "${baseline_avg} ms"
+    printf "  %-${w}s %s\n" "Sustained Avg Latency:"     "${sustained_avg} ms"
+    printf "  %-${w}s %s\n" "High Jitter:"               "${high_jitter}"
+    printf "  %-${w}s %s\n" "Latency Under Load:"        "${latency_under_load}"
+    printf "  %-${w}s %s\n" "Packet Loss Detected:"      "${packet_loss}"
+    printf "  %-${w}s %s\n" "Slow Recovery:"             "${slow_recovery}"
   } >> "$report_file"
 }
 
@@ -9092,23 +9070,20 @@ render_vlan_trunk_report() {
   lldp_count="$(jq -r '(.lldp_neighbours // []) | length' "$file" 2>/dev/null)"
 
   {
-    echo "Status: ${status:-unknown}"
-    if [[ -n "$error_code" ]]; then
-      echo "Error Code: $error_code"
-    fi
-    if [[ -n "$error_message" ]]; then
-      echo "Error Message: $error_message"
-    fi
+    local w=26
+    printf "  %-${w}s %s\n" "Status:"                  "${status:-unknown}"
+    [[ -n "$error_code" ]]    && printf "  %-${w}s %s\n" "Error Code:"    "$error_code"
+    [[ -n "$error_message" ]] && printf "  %-${w}s %s\n" "Error Message:" "$error_message"
     if [[ -n "$warning_count" && "$warning_count" != "0" ]]; then
-      echo "Warnings: $warning_count"
-      jq -r '(.warnings // [])[] | "  - " + .' "$file" 2>/dev/null || true
+      printf "  %-${w}s %s\n" "Warnings:" "$warning_count"
+      jq -r '(.warnings // [])[] | "    - " + .' "$file" 2>/dev/null || true
     fi
-    echo "Interface: ${iface}"
-    echo "802.1Q Tagged Frames Observed: ${tagged_frames_observed}"
-    echo "Observed VLAN IDs: ${observed_vlan_ids}"
-    echo "Trunk Port Suspected: $(jq -r '.indicators.trunk_port_suspected // false' "$file" 2>/dev/null)"
-    echo "Multiple VLANs Visible: $(jq -r '.indicators.multiple_vlans_visible // false' "$file" 2>/dev/null)"
-    echo "CDP/LLDP Neighbour Frames Received: $(jq -r '.indicators.cdp_exposed // false' "$file" 2>/dev/null)"
+    printf "  %-${w}s %s\n" "Interface:"               "${iface}"
+    printf "  %-${w}s %s\n" "Tagged Frames (802.1Q):"  "${tagged_frames_observed}"
+    printf "  %-${w}s %s\n" "Observed VLAN IDs:"       "${observed_vlan_ids}"
+    printf "  %-${w}s %s\n" "Trunk Port Suspected:"    "$(jq -r '.indicators.trunk_port_suspected // false' "$file" 2>/dev/null)"
+    printf "  %-${w}s %s\n" "Multiple VLANs Visible:"  "$(jq -r '.indicators.multiple_vlans_visible // false' "$file" 2>/dev/null)"
+    printf "  %-${w}s %s\n" "CDP/LLDP Frames Seen:"    "$(jq -r '.indicators.cdp_exposed // false' "$file" 2>/dev/null)"
     echo ""
     if [[ "$cdp_count" -gt 0 ]]; then
       echo "CDP Neighbours (${cdp_count}):"
@@ -9160,21 +9135,16 @@ render_dhcp_report() {
   rogue_suspected="$(jq -r '.rogue_dhcp_suspected // false' "$file" 2>/dev/null)"
 
   {
-    echo "Status: ${status:-unknown}"
-    if [[ -n "$error_code" ]]; then
-      echo "Error Code: $error_code"
-    fi
-    if [[ -n "$error_message" ]]; then
-      echo "Error Message: $error_message"
-    fi
-    if [[ -n "$warning_count" && "$warning_count" != "0" ]]; then
-      echo "Warnings: $warning_count"
-    fi
-    echo "DHCP Responders Observed: ${found:-0}"
-    echo "Discovery Attempts: ${attempts:-1}"
-    echo "Unique Offers Observed: ${offers_observed:-0}"
-    echo "Raw Offers Captured: ${raw_offers_observed:-0}"
-    echo "Possible Rogue DHCP Present: ${rogue_suspected}"
+    local w=28
+    printf "  %-${w}s %s\n" "Status:"                     "${status:-unknown}"
+    [[ -n "$error_code" ]]    && printf "  %-${w}s %s\n" "Error Code:"    "$error_code"
+    [[ -n "$error_message" ]] && printf "  %-${w}s %s\n" "Error Message:" "$error_message"
+    [[ -n "$warning_count" && "$warning_count" != "0" ]] && printf "  %-${w}s %s\n" "Warnings:" "$warning_count"
+    printf "  %-${w}s %s\n" "DHCP Responders Observed:"   "${found:-0}"
+    printf "  %-${w}s %s\n" "Discovery Attempts:"         "${attempts:-1}"
+    printf "  %-${w}s %s\n" "Unique Offers Observed:"     "${offers_observed:-0}"
+    printf "  %-${w}s %s\n" "Raw Offers Captured:"        "${raw_offers_observed:-0}"
+    printf "  %-${w}s %s\n" "Possible Rogue DHCP Present:" "${rogue_suspected}"
   } >> "$report_file"
 
   jq -r 'if (.relay_sources_seen // []) | length > 0 then "Relay or Proxy Sources Seen: \((.relay_sources_seen // []) | join(", "))" else empty end' "$file" >> "$report_file"
@@ -9213,28 +9183,25 @@ render_dhcp_response_time_report() {
   server_ip="$(     jq -r '.server_ip // "unknown"'         "$file" 2>/dev/null)"
 
   {
-    echo "Status: ${status:-unknown}"
-    if [[ -n "$error_code" ]]; then
-      echo "Error Code: $error_code"
-    fi
-    if [[ -n "$error_message" ]]; then
-      echo "Error Message: $error_message"
-    fi
+    local w=18
+    printf "  %-${w}s %s\n" "Status:"          "${status:-unknown}"
+    [[ -n "$error_code" ]]    && printf "  %-${w}s %s\n" "Error Code:"    "$error_code"
+    [[ -n "$error_message" ]] && printf "  %-${w}s %s\n" "Error Message:" "$error_message"
     if [[ -n "$warning_count" && "$warning_count" != "0" ]]; then
-      echo "Warnings: $warning_count"
-      jq -r '(.warnings // [])[] | "  - " + .' "$file" 2>/dev/null || true
+      printf "  %-${w}s %s\n" "Warnings:" "$warning_count"
+      jq -r '(.warnings // [])[] | "    - " + .' "$file" 2>/dev/null || true
     fi
-    echo "Interface:        $iface"
-    echo "DHCP Server:      $server_ip"
-    echo "Probes Sent:      $probe_count"
-    echo "Offers Received:  $responded_count"
-    echo "Packet Loss:      ${loss}%"
-    echo "Min Latency:      ${min_ms} ms"
-    echo "Avg Latency:      ${avg_ms} ms"
-    echo "Max Latency:      ${max_ms} ms"
+    printf "  %-${w}s %s\n" "Interface:"       "$iface"
+    printf "  %-${w}s %s\n" "DHCP Server:"     "$server_ip"
+    printf "  %-${w}s %s\n" "Probes Sent:"     "$probe_count"
+    printf "  %-${w}s %s\n" "Offers Received:" "$responded_count"
+    printf "  %-${w}s %s\n" "Packet Loss:"     "${loss}%"
+    printf "  %-${w}s %s\n" "Min Latency:"     "${min_ms} ms"
+    printf "  %-${w}s %s\n" "Avg Latency:"     "${avg_ms} ms"
+    printf "  %-${w}s %s\n" "Max Latency:"     "${max_ms} ms"
     echo ""
-    echo "Per-Probe Results:"
-    jq -r '.response_times_ms | to_entries[] | "  Probe \(.key + 1): " + (if .value == null then "no response" else (.value | tostring) + " ms" end)' "$file" 2>/dev/null || true
+    echo "  Per-Probe Results:"
+    jq -r '.response_times_ms | to_entries[] | "    Probe \(.key + 1): " + (if .value == null then "no response" else (.value | tostring) + " ms" end)' "$file" 2>/dev/null || true
   } >> "$report_file"
 }
 
@@ -9255,19 +9222,14 @@ render_generic_network_scan_report() {
   server_count="$(jq -r '(.servers // []) | length' "$file" 2>/dev/null)"
 
   {
-    echo "Status: ${status:-unknown}"
-    if [[ -n "$error_code" ]]; then
-      echo "Error Code: $error_code"
-    fi
-    if [[ -n "$error_message" ]]; then
-      echo "Error Message: $error_message"
-    fi
-    if [[ -n "$warning_count" && "$warning_count" != "0" ]]; then
-      echo "Warnings: $warning_count"
-    fi
-    echo "Network Range: ${network:-unknown}"
-    echo "Scanned Ports: ${ports:-unknown}"
-    echo "Servers Found: $server_count"
+    local w=16
+    printf "  %-${w}s %s\n" "Status:"        "${status:-unknown}"
+    [[ -n "$error_code" ]]    && printf "  %-${w}s %s\n" "Error Code:"    "$error_code"
+    [[ -n "$error_message" ]] && printf "  %-${w}s %s\n" "Error Message:" "$error_message"
+    [[ -n "$warning_count" && "$warning_count" != "0" ]] && printf "  %-${w}s %s\n" "Warnings:" "$warning_count"
+    printf "  %-${w}s %s\n" "Network Range:" "${network:-unknown}"
+    printf "  %-${w}s %s\n" "Scanned Ports:" "${ports:-unknown}"
+    printf "  %-${w}s %s\n" "Servers Found:" "$server_count"
   } >> "$report_file"
 
   if [[ "$label" == "DNS" ]]; then
@@ -9298,27 +9260,24 @@ render_duplicate_ip_report() {
   duplicate_count="$(jq -r '.duplicate_count // 0' "$file" 2>/dev/null)"
 
   {
-    echo "Status: ${status:-unknown}"
-    if [[ -n "$error_code" ]]; then
-      echo "Error Code: $error_code"
-    fi
-    if [[ -n "$error_message" ]]; then
-      echo "Error Message: $error_message"
-    fi
+    local w=19
+    printf "  %-${w}s %s\n" "Status:"          "${status:-unknown}"
+    [[ -n "$error_code" ]]    && printf "  %-${w}s %s\n" "Error Code:"    "$error_code"
+    [[ -n "$error_message" ]] && printf "  %-${w}s %s\n" "Error Message:" "$error_message"
     if [[ -n "$warning_count" && "$warning_count" != "0" ]]; then
-      echo "Warnings: $warning_count"
-      jq -r '(.warnings // [])[] | "  - " + .' "$file" 2>/dev/null || true
+      printf "  %-${w}s %s\n" "Warnings:" "$warning_count"
+      jq -r '(.warnings // [])[] | "    - " + .' "$file" 2>/dev/null || true
     fi
-    echo "Interface:        ${iface}"
-    echo "Network Range:    ${network}"
-    echo "Total Hosts Seen: ${total_hosts}"
-    echo "Duplicate IPs:    ${duplicate_count}"
+    printf "  %-${w}s %s\n" "Interface:"       "${iface}"
+    printf "  %-${w}s %s\n" "Network Range:"   "${network}"
+    printf "  %-${w}s %s\n" "Total Hosts Seen:" "${total_hosts}"
+    printf "  %-${w}s %s\n" "Duplicate IPs:"   "${duplicate_count}"
     echo ""
     if [[ "$duplicate_count" -gt 0 ]]; then
-      echo "Conflicting Hosts:"
-      jq -r '.duplicates[]? | "  IP: " + .ip + "  MACs: " + (.macs | join(", "))' "$file" 2>/dev/null || true
+      echo "  Conflicting Hosts:"
+      jq -r '.duplicates[]? | "    IP: " + .ip + "  MACs: " + (.macs | join(", "))' "$file" 2>/dev/null || true
     else
-      echo "No duplicate IPs detected."
+      echo "  No duplicate IPs detected."
     fi
   } >> "$report_file"
 }
