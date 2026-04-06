@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.184"
+APP_VERSION="v1.2.185"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -9086,30 +9086,30 @@ render_vlan_trunk_report() {
     printf "  %-${w}s %s\n" "CDP/LLDP Frames Seen:"    "$(jq -r '.indicators.cdp_exposed // false' "$file" 2>/dev/null)"
     echo ""
     if [[ "$cdp_count" -gt 0 ]]; then
-      echo "CDP Neighbours (${cdp_count}):"
+      echo "  CDP Neighbours (${cdp_count}):"
       jq -r '.cdp_neighbours[]? |
-        "  Device ID:    " + .device_id,
-        "  Platform:     " + .platform,
-        "  Port ID:      " + .port_id,
-        "  Native VLAN:  " + (if .native_vlan != null then (.native_vlan | tostring) else "unknown" end),
-        "  VTP Domain:   " + (if .vtp_domain != "" then .vtp_domain else "none" end),
-        "  Duplex:       " + (if .duplex != "" then .duplex else "unknown" end),
+        "    Device ID:    " + .device_id,
+        "    Platform:     " + .platform,
+        "    Port ID:      " + .port_id,
+        "    Native VLAN:  " + (if .native_vlan != null then (.native_vlan | tostring) else "unknown" end),
+        "    VTP Domain:   " + (if .vtp_domain != "" then .vtp_domain else "none" end),
+        "    Duplex:       " + (if .duplex != "" then .duplex else "unknown" end),
         ""' "$file" 2>/dev/null || true
     else
-      echo "CDP Neighbours: none detected"
+      echo "  CDP Neighbours:  none detected"
     fi
     if [[ "$lldp_count" -gt 0 ]]; then
-      echo "LLDP Neighbours (${lldp_count}):"
+      echo "  LLDP Neighbours (${lldp_count}):"
       jq -r '.lldp_neighbours[]? |
-        "  System Name:  " + .system_name,
-        "  Chassis ID:   " + .chassis_id,
-        "  Port ID:      " + .port_id,
-        "  Description:  " + (if .system_description != "" then .system_description else "none" end),
+        "    System Name:  " + .system_name,
+        "    Chassis ID:   " + .chassis_id,
+        "    Port ID:      " + .port_id,
+        "    Description:  " + (if .system_description != "" then .system_description else "none" end),
         ""' "$file" 2>/dev/null || true
     else
-      echo "LLDP Neighbours: none detected"
+      echo "  LLDP Neighbours: none detected"
     fi
-    echo "Double-Tag Probe: not attempted"
+    echo "  Double-Tag Probe: not attempted"
   } >> "$report_file"
 }
 
@@ -9147,20 +9147,20 @@ render_dhcp_report() {
     printf "  %-${w}s %s\n" "Possible Rogue DHCP Present:" "${rogue_suspected}"
   } >> "$report_file"
 
-  jq -r 'if (.relay_sources_seen // []) | length > 0 then "Relay or Proxy Sources Seen: \((.relay_sources_seen // []) | join(", "))" else empty end' "$file" >> "$report_file"
+  jq -r 'if (.relay_sources_seen // []) | length > 0 then "  Relay or Proxy Sources Seen: \((.relay_sources_seen // []) | join(", "))" else empty end' "$file" >> "$report_file"
 
   jq -r '
     (.relay_sources_seen // []) as $relays |
     ((.servers // []) | map(.ip)) as $responders |
     ($relays - $responders) as $relay_only |
     if ($relay_only | length) > 0 then
-      "  (Relay/proxy only \u2014 no DHCP offers issued: " + ($relay_only | join(", ")) + ")"
+      "    (Relay/proxy only \u2014 no DHCP offers issued: " + ($relay_only | join(", ")) + ")"
     else empty end
   ' "$file" >> "$report_file"
 
-  jq -r '.servers[]? | "- DHCP Responder \(.ip) | Unique Offers: \(.offers_observed // 0) | Raw Offers: \(.raw_offers_observed // .offers_observed // 0) | Classification: \(.classification // "unknown") | Suspected Rogue: \(.suspected_rogue // false) | Open Ports: \((.open_ports // []) | if length > 0 then map(tostring) | join(", ") else "none found" end)"' "$file" >> "$report_file"
+  jq -r '.servers[]? | "  - DHCP Responder \(.ip) | Unique Offers: \(.offers_observed // 0) | Raw Offers: \(.raw_offers_observed // .offers_observed // 0) | Classification: \(.classification // "unknown") | Suspected Rogue: \(.suspected_rogue // false) | Open Ports: \((.open_ports // []) | if length > 0 then map(tostring) | join(", ") else "none found" end)"' "$file" >> "$report_file"
 
-  jq -r 'if (.suspected_rogue_servers // []) | length > 0 then "Suspected Rogue Responders: \((.suspected_rogue_servers // []) | join(", "))" else empty end' "$file" >> "$report_file"
+  jq -r 'if (.suspected_rogue_servers // []) | length > 0 then "  Suspected Rogue Responders: \((.suspected_rogue_servers // []) | join(", "))" else empty end' "$file" >> "$report_file"
 }
 
 render_dhcp_response_time_report() {
@@ -9234,12 +9234,12 @@ render_generic_network_scan_report() {
 
   if [[ "$label" == "DNS" ]]; then
     jq -r '.servers[]? |
-      "- DNS Host \(.ip) | Ports: \((.open_ports // []) | map(tostring) | join(", ")) | google.com: \(
+      "  - DNS Host \(.ip) | Ports: \((.open_ports // []) | map(tostring) | join(", ")) | google.com: \(
         if .resolution_test then
           (if .resolution_test.resolved then "OK (" + ((.resolution_test.response_ms // "?") | tostring) + " ms)" else "FAILED" end)
         else "not tested" end)"' "$file" >> "$report_file"
   else
-    jq -r --arg lbl "$label" '.servers[]? | "- \($lbl) Host \(.ip) | Open Ports: \((.open_ports // []) | if length > 0 then map(tostring) | join(", ") else "none found" end) | Services: \((.detected_services // []) | if length > 0 then join(", ") else "unknown" end)"' "$file" >> "$report_file"
+    jq -r --arg lbl "$label" '.servers[]? | "  - \($lbl) Host \(.ip) | Open Ports: \((.open_ports // []) | if length > 0 then map(tostring) | join(", ") else "none found" end) | Services: \((.detected_services // []) | if length > 0 then join(", ") else "unknown" end)"' "$file" >> "$report_file"
   fi
 }
 
