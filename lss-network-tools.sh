@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.195"
+APP_VERSION="v1.2.196"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -2291,19 +2291,34 @@ PYEOF
                 printf "  ${yellow}${bold}Edit Task %s — %s${reset}\n" "$task_id" "$title"
               fi
               printf "  ${cyan}──────────────────────────────────────────────────${reset}\n"
-              printf "  Press Enter on any field to keep its current value.\n"
+              printf "  Press Enter to keep current value.  Enter 0 to exit without saving.\n"
               echo
+              local _tmp_copy _edit_cancelled=false
+              _tmp_copy="$(mktemp /tmp/lss-edit-copy-XXXXXX.json)"
+              cp "$file_path" "$_tmp_copy"
               local _key _val _new_val
               while IFS=$'\t' read -r _key _val; do
                 printf "  ${bold}%-28s${reset} %s\n" "${_key}:" "${_val}"
                 read -r -p "  New value: " _new_val </dev/tty
+                if [[ "$_new_val" == "0" ]]; then
+                  _edit_cancelled=true
+                  break
+                fi
                 if [[ -n "$_new_val" ]]; then
-                  python3 "$_update_py" "$file_path" "$_key" "$_new_val" 2>/dev/null \
+                  python3 "$_update_py" "$_tmp_copy" "$_key" "$_new_val" 2>/dev/null \
                     || printf "  ${red}Failed to update '%s'${reset}\n" "$_key"
                 fi
                 echo
               done < <(python3 "$_edit_py" "$file_path" 2>/dev/null)
-              printf "  ${green}Saved.${reset}\n"
+              if [[ "$_edit_cancelled" == "true" ]]; then
+                rm -f "$_tmp_copy"
+                echo
+                printf "  ${yellow}Cancelled — no changes saved.${reset}\n"
+              else
+                cp "$_tmp_copy" "$file_path"
+                rm -f "$_tmp_copy"
+                printf "  ${green}Saved.${reset}\n"
+              fi
               sleep 1
             done < <(task_json_files "$task_id")
           done
