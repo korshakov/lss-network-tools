@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.185"
+APP_VERSION="v1.2.186"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -2172,7 +2172,7 @@ PYEOF
           14) render_custom_target_stress_report "$file_path" "$tmp_out" ;;
           15) render_custom_target_identity_report "$file_path" "$tmp_out" ;;
           16) render_custom_target_dns_assessment_report "$file_path" "$tmp_out" ;;
-          17) render_wireless_site_survey_report "$file_path" "$tmp_out" ;;
+          17) render_wireless_site_survey_report "$file_path" "$tmp_out" "color" ;;
           18) render_unifi_discovery_report "$file_path" "$tmp_out" ;;
           19) render_unifi_adoption_report "$file_path" "$tmp_out" ;;
           20) render_find_device_by_mac_report "$file_path" "$tmp_out" ;;
@@ -9991,6 +9991,13 @@ render_unifi_discovery_report() {
 render_wireless_site_survey_report() {
   local file="$1"
   local report_file="$2"
+  local use_color="${3:-}"
+  local cyan="" bold="" reset=""
+  if [[ "$use_color" == "color" ]]; then
+    cyan='\033[0;36m'
+    bold='\033[1m'
+    reset='\033[0m'
+  fi
   local status rooms_scanned iface
 
   status="$(jq -r '.status // "success"' "$file" 2>/dev/null)"
@@ -9998,17 +10005,19 @@ render_wireless_site_survey_report() {
   rooms_scanned="$(jq -r '.rooms_scanned // 0' "$file" 2>/dev/null)"
 
   {
-    echo "Status:        ${status:-unknown}"
-    echo "Interface:     ${iface}"
-    echo "Rooms Scanned: ${rooms_scanned}"
+    local w=16
+    printf "  %-${w}s %s\n" "Status:"        "${status:-unknown}"
+    printf "  %-${w}s %s\n" "Interface:"     "${iface}"
+    printf "  %-${w}s %s\n" "Rooms Scanned:" "${rooms_scanned}"
     echo ""
 
     local room_count
     room_count="$(jq '.survey | length' "$file" 2>/dev/null || echo 0)"
     if [[ "$room_count" -eq 0 ]]; then
-      echo "No room data recorded."
+      echo "  No room data recorded."
     else
-      printf "  SURVEY SUMMARY\n"
+      printf "  ${bold}${cyan}Survey Summary${reset}\n"
+      printf "  ${cyan}──────────────────────────────────────────────────${reset}\n"
       printf "  %-4s  %-20s  %-8s  %-16s  %-4s  %-12s  %-5s  %s\n" \
         "#" "Building" "Floor" "Room / Area" "AP" "AP Label" "Nets" "Strongest Signal"
       printf "  %-4s  %-20s  %-8s  %-16s  %-4s  %-12s  %-5s  %s\n" \
@@ -10030,8 +10039,8 @@ render_wireless_site_survey_report() {
         | awk -F'\t' '{printf "  %-4s  %-20s  %-8s  %-16s  %-4s  %-12s  %-5s  %s\n", $1,$2,$3,$4,$5,$6,$7,$8}' || true
       echo ""
 
-      printf "  ROOM DETAILS  (top 5 networks by signal strength)\n"
-      printf "  --------------------------------------------------\n"
+      printf "  ${bold}${cyan}Room Details${reset}${cyan}  (top 5 networks by signal strength)${reset}\n"
+      printf "  ${cyan}──────────────────────────────────────────────────${reset}\n"
       local room_idx=0
       jq -c '.survey[]' "$file" 2>/dev/null | while IFS= read -r room_json; do
         room_idx=$(( room_idx + 1 ))
