@@ -284,14 +284,75 @@ brew_install_if_missing() {
 install_linux_dependencies() {
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update
-    apt-get install -y nmap jq iproute2 iputils-ping tcpdump net-tools speedtest-cli zip unzip python3 python3-pip python3-scapy iw sshpass
-    pip3 install --quiet fpdf2 2>/dev/null || pip3 install --quiet --break-system-packages fpdf2 2>/dev/null || true
+    apt-get install -y \
+      nmap jq iproute2 iputils-ping tcpdump net-tools \
+      zip unzip python3 python3-pip iw sshpass
+
+    # speedtest-cli: try apt package first, fall back to pip3
+    if ! apt-get install -y speedtest-cli 2>/dev/null; then
+      log "speedtest-cli not available via apt — installing via pip3..."
+      pip3 install --quiet speedtest-cli 2>/dev/null \
+        || pip3 install --quiet --break-system-packages speedtest-cli 2>/dev/null \
+        || log "[WARN] speedtest-cli install failed — Task 2 (Internet Speed Test) will not work"
+    fi
+
+    # scapy: try apt package first, fall back to pip3
+    if ! apt-get install -y python3-scapy 2>/dev/null; then
+      log "python3-scapy not available via apt — installing via pip3..."
+      pip3 install --quiet scapy 2>/dev/null \
+        || pip3 install --quiet --break-system-packages scapy 2>/dev/null \
+        || log "[WARN] scapy install failed — Tasks 11 and 18 will not work"
+    fi
+    if ! python3 -c "import scapy" 2>/dev/null; then
+      log "[WARN] scapy not importable after install attempt — Tasks 11 and 18 may not work"
+    else
+      log "[OK] python3-scapy"
+    fi
+
+    # fpdf2: pip3 only (no apt package)
+    pip3 install --quiet fpdf2 2>/dev/null \
+      || pip3 install --quiet --break-system-packages fpdf2 2>/dev/null \
+      || log "[WARN] fpdf2 install failed — PDF report generation will not work"
+    if python3 -c "import fpdf" 2>/dev/null; then
+      log "[OK] python3-fpdf2"
+    else
+      log "[WARN] fpdf2 not importable after install attempt — PDF report generation will not work"
+    fi
     return 0
   fi
 
   if command -v dnf >/dev/null 2>&1; then
-    dnf install -y nmap jq iproute iputils tcpdump net-tools speedtest-cli zip unzip python3 python3-pip python3-scapy iw sshpass
-    pip3 install --quiet fpdf2 2>/dev/null || pip3 install --quiet --break-system-packages fpdf2 2>/dev/null || true
+    dnf install -y \
+      nmap jq iproute iputils tcpdump net-tools \
+      zip unzip python3 python3-pip iw sshpass
+
+    # speedtest-cli: not in standard dnf repos — use pip3
+    pip3 install --quiet speedtest-cli 2>/dev/null \
+      || pip3 install --quiet --break-system-packages speedtest-cli 2>/dev/null \
+      || log "[WARN] speedtest-cli install failed — Task 2 (Internet Speed Test) will not work"
+
+    # scapy: try dnf package first, fall back to pip3
+    if ! dnf install -y python3-scapy 2>/dev/null; then
+      log "python3-scapy not available via dnf — installing via pip3..."
+      pip3 install --quiet scapy 2>/dev/null \
+        || pip3 install --quiet --break-system-packages scapy 2>/dev/null \
+        || log "[WARN] scapy install failed — Tasks 11 and 18 will not work"
+    fi
+    if ! python3 -c "import scapy" 2>/dev/null; then
+      log "[WARN] scapy not importable after install attempt — Tasks 11 and 18 may not work"
+    else
+      log "[OK] python3-scapy"
+    fi
+
+    # fpdf2: pip3 only
+    pip3 install --quiet fpdf2 2>/dev/null \
+      || pip3 install --quiet --break-system-packages fpdf2 2>/dev/null \
+      || log "[WARN] fpdf2 install failed — PDF report generation will not work"
+    if python3 -c "import fpdf" 2>/dev/null; then
+      log "[OK] python3-fpdf2"
+    else
+      log "[WARN] fpdf2 not importable after install attempt — PDF report generation will not work"
+    fi
     return 0
   fi
 
@@ -306,6 +367,7 @@ install_macos_dependencies() {
   brew_install_if_missing jq jq
   brew_install_if_missing speedtest-cli speedtest-cli
   brew_install_if_missing tcpdump tcpdump
+  brew_install_if_missing python3 python3
   brew_install_if_missing sshpass hudochenkov/sshpass/sshpass
 
   log "Checking Python scapy library..."
