@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.181"
+APP_VERSION="v1.2.182"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -2001,6 +2001,8 @@ view_results_for_run_dir() {
   local bold='\033[1m'
   local green='\033[0;32m'
   local reset='\033[0m'
+  local -a all_ids all_titles all_avail
+  local half tl_tmp tr_tmp term_width col_w i
 
   RUN_OUTPUT_DIR="$run_dir"
   # Restore RUN_OUTPUT_DIR on any exit from this function, including crashes
@@ -2009,20 +2011,73 @@ view_results_for_run_dir() {
   while true; do
     # Rebuild available list each iteration
     available_ids=()
+    all_ids=() all_titles=() all_avail=()
     clear_screen_if_supported
+
+    # Collect all task data
+    for task_id in $(get_task_ids); do
+      title="$(task_title "$task_id")"
+      all_ids+=("$task_id")
+      all_titles+=("$title")
+      if [[ -n "$(task_json_files "$task_id")" ]]; then
+        available_ids+=("$task_id")
+        all_avail+=("1")
+      else
+        all_avail+=("0")
+      fi
+    done
+
+    # Terminal width for two-column layout
+    term_width="$(stty size </dev/tty 2>/dev/null | awk '{print $2}')"
+    [[ -z "$term_width" || "$term_width" -lt 60 ]] && term_width="${COLUMNS:-80}"
+    [[ "$term_width" -lt 60 ]] && term_width=80
+    col_w=$(( (term_width - 5) / 2 ))
+
     echo
     printf "  ${yellow}${bold}Task Results${reset}\n"
     printf "  ${cyan}──────────────────────────────────────────────────${reset}\n"
     echo
-    for task_id in $(get_task_ids); do
-      title="$(task_title "$task_id")"
-      if [[ -n "$(task_json_files "$task_id")" ]]; then
-        available_ids+=("$task_id")
-        printf "  ${green}[x]${reset}  ${bold}%2s)${reset}  %s\n" "$task_id" "$title"
-      else
-        printf "  [ ]  %2s)  %s\n" "$task_id" "$title"
-      fi
-    done
+
+    half=$(( (${#all_ids[@]} + 1) / 2 ))
+    tl_tmp="$(mktemp /tmp/lss-tl-XXXXXX)"
+    tr_tmp="$(mktemp /tmp/lss-tr-XXXXXX)"
+    {
+      for (( i=0; i<half; i++ )); do
+        if [[ "${all_avail[$i]}" == "1" ]]; then
+          printf "${green}[x]${reset}  ${bold}%2s)${reset}  %s\n" "${all_ids[$i]}" "${all_titles[$i]}"
+        else
+          printf "[ ]  %2s)  %s\n" "${all_ids[$i]}" "${all_titles[$i]}"
+        fi
+      done
+    } > "$tl_tmp"
+    {
+      for (( i=half; i<${#all_ids[@]}; i++ )); do
+        if [[ "${all_avail[$i]}" == "1" ]]; then
+          printf "${green}[x]${reset}  ${bold}%2s)${reset}  %s\n" "${all_ids[$i]}" "${all_titles[$i]}"
+        else
+          printf "[ ]  %2s)  %s\n" "${all_ids[$i]}" "${all_titles[$i]}"
+        fi
+      done
+    } > "$tr_tmp"
+    python3 - "$tl_tmp" "$tr_tmp" "$col_w" << 'PYEOF'
+import sys, re
+def strip_ansi(s):
+    return re.sub(r'\033\[[0-9;]*m', '', s)
+def pad_line(s, width):
+    return s + ' ' * max(0, width - len(strip_ansi(s)))
+fa, fb, col_w = sys.argv[1], sys.argv[2], int(sys.argv[3])
+with open(fa) as f:
+    left = [l.rstrip('\n') for l in f]
+with open(fb) as f:
+    right = [l.rstrip('\n') for l in f]
+n = max(len(left), len(right))
+for i in range(n):
+    l = '  ' + (left[i] if i < len(left) else '')
+    r = right[i] if i < len(right) else ''
+    print(pad_line(l, col_w + 2) + '   ' + r)
+PYEOF
+    rm -f "$tl_tmp" "$tr_tmp"
+
     echo
     printf "  ${cyan}──────────────────────────────────────────────────${reset}\n"
     echo
@@ -2075,14 +2130,15 @@ view_results_for_run_dir() {
         [[ -z "$file_path" ]] && continue
         entry_index=$((entry_index + 1))
         {
-          printf "${cyan}================================================${reset}\n"
+          echo
           if task_supports_multiple_entries "$task_id"; then
-            printf "${bold}%s: %s — Device %s${reset}\n" "$task_id" "$title" "$entry_index"
+            printf "  ${yellow}${bold}Task %s — %s  (Device %s)${reset}\n" "$task_id" "$title" "$entry_index"
           else
-            printf "${bold}%s: %s${reset}\n" "$task_id" "$title"
+            printf "  ${yellow}${bold}Task %s — %s${reset}\n" "$task_id" "$title"
           fi
-          printf "${cyan}%s${reset}\n" "Description: $description"
-          printf "${cyan}================================================${reset}\n"
+          [[ -n "$description" ]] && printf "  ${cyan}%s${reset}\n" "$description"
+          printf "  ${cyan}──────────────────────────────────────────────────${reset}\n"
+          echo
         } >> "$tmp_out"
         case "$task_id" in
           1)  render_interface_info_report "$file_path" "$tmp_out" ;;
@@ -2114,7 +2170,7 @@ view_results_for_run_dir() {
     cat "$tmp_out"
     rm -f "$tmp_out"
     echo
-    read -r -p "Press Enter to continue..." _
+    read -r -p "  Press Enter to continue..." _
   done
 }
 
@@ -9978,15 +10034,16 @@ render_wireless_site_survey_report() {
     if [[ "$room_count" -eq 0 ]]; then
       echo "No room data recorded."
     else
-      echo "SURVEY SUMMARY"
-      echo "--------------"
-      printf "%-3s  %-20s  %-8s  %-16s  %-3s  %-12s  %-5s  %s\n" \
+      printf "  SURVEY SUMMARY\n"
+      printf "  %-4s  %-20s  %-8s  %-16s  %-4s  %-12s  %-5s  %s\n" \
         "#" "Building" "Floor" "Room / Area" "AP" "AP Label" "Nets" "Strongest Signal"
+      printf "  %-4s  %-20s  %-8s  %-16s  %-4s  %-12s  %-5s  %s\n" \
+        "----" "--------------------" "--------" "----------------" "----" "------------" "-----" "----------------"
       jq -r '.survey | to_entries[] |
         (.key + 1 | tostring) as $n |
         .value as $r |
         ($r.networks // [] | sort_by(.rssi_dbm // -999) | reverse | .[0]) as $top |
-        (if $top then ($top.ssid + " (" + (if $top.rssi_dbm != null then ($top.rssi_dbm | tostring) + " dBm" else "--" end) + ", ch " + ($top.channel | tostring) + ", " + $top.security + ")") else "--" end) as $sig |
+        (if $top then ($top.ssid + " (" + (if $top.rssi_dbm != null then ($top.rssi_dbm | tostring) + " dBm" else "--" end) + ", ch " + ($top.channel | tostring) + ", " + ($top.security // "--") + ")") else "--" end) as $sig |
         [$n,
          ($r.building // "--"),
          ($r.floor // "--"),
@@ -9995,33 +10052,47 @@ render_wireless_site_survey_report() {
          ($r.ap_label // "--"),
          (($r.networks // []) | length | tostring),
          $sig] |
-        @tsv' "$file" 2>/dev/null | awk -F'\t' '{printf "%-3s  %-20s  %-8s  %-16s  %-3s  %-12s  %-5s  %s\n", $1,$2,$3,$4,$5,$6,$7,$8}' || true
+        @tsv' "$file" 2>/dev/null \
+        | awk -F'\t' '{printf "  %-4s  %-20s  %-8s  %-16s  %-4s  %-12s  %-5s  %s\n", $1,$2,$3,$4,$5,$6,$7,$8}' || true
       echo ""
 
-      echo "ROOM DETAIL  (top 5 networks by signal strength)"
-      echo "------------------------------------------------"
-      jq -r '.survey[] |
-        "Building: " + (.building // "--") + " | Floor: " + (.floor // "--") + " | Room: " + (.room // "--"),
-        "AP Present: " + (if .ap_present then "Yes" else "No" end),
-        (if .ap_label then "AP Label:   " + .ap_label else empty end),
-        "Timestamp:  " + (.timestamp // "--"),
-        "",
-        (if ((.networks // []) | length) == 0 then
-          "  No networks detected."
+      printf "  ROOM DETAILS  (top 5 networks by signal strength)\n"
+      printf "  --------------------------------------------------\n"
+      local room_idx=0
+      jq -c '.survey[]' "$file" 2>/dev/null | while IFS= read -r room_json; do
+        room_idx=$(( room_idx + 1 ))
+        local building floor room ap_present ap_label timestamp net_count
+        building="$(jq -r '.building // "--"' <<< "$room_json")"
+        floor="$(jq -r '.floor // "--"' <<< "$room_json")"
+        room="$(jq -r '.room // "--"' <<< "$room_json")"
+        ap_present="$(jq -r 'if .ap_present then "Yes" else "No" end' <<< "$room_json")"
+        ap_label="$(jq -r '.ap_label // ""' <<< "$room_json")"
+        timestamp="$(jq -r '.timestamp // "--"' <<< "$room_json")"
+        net_count="$(jq '.networks | length' <<< "$room_json" 2>/dev/null || echo 0)"
+        echo ""
+        printf "  Room %s: %s | Floor: %s | Area: %s\n" "$room_idx" "$building" "$floor" "$room"
+        printf "  AP Present: %s%s\n" "$ap_present" "$([ -n "$ap_label" ] && printf "  (Label: %s)" "$ap_label")"
+        printf "  Timestamp:  %s\n" "$timestamp"
+        printf "  Networks:   %s found\n" "$net_count"
+        if [[ "$net_count" -eq 0 ]]; then
+          printf "  No networks detected.\n"
         else
-          "  " + (["SSID","Signal","Ch","Band","Width","PHY Mode","Security"] | join("  |  ")),
-          (.networks // [] | sort_by(.rssi_dbm // -999) | reverse | .[0:5][] |
-            "  " + ([
-              (.ssid // "(hidden)"),
-              (if .rssi_dbm != null then ((.rssi_dbm | tostring) + " dBm") else "--" end),
-              ("ch " + (.channel | tostring)),
-              (.band // "--"),
-              (.channel_width // "--"),
-              (.phy_mode // "--"),
-              (.security // "--")
-            ] | join("  |  ")))
-        end),
-        ""' "$file" 2>/dev/null || true
+          echo ""
+          printf "  %-28s  %-9s  %-6s  %-7s  %-7s  %-10s  %s\n" \
+            "SSID" "Signal" "Ch" "Band" "Width" "PHY Mode" "Security"
+          printf "  %-28s  %-9s  %-6s  %-7s  %-7s  %-10s  %s\n" \
+            "----------------------------" "---------" "------" "-------" "-------" "----------" "--------"
+          jq -r '.networks // [] | sort_by(.rssi_dbm // -999) | reverse | .[0:5][] |
+            [(.ssid // "(hidden)"),
+             (if .rssi_dbm != null then ((.rssi_dbm | tostring) + " dBm") else "--" end),
+             ("ch " + (.channel | tostring)),
+             (.band // "--"),
+             (.channel_width // "--"),
+             (.phy_mode // "--"),
+             (.security // "--")] | @tsv' <<< "$room_json" 2>/dev/null \
+            | awk -F'\t' '{printf "  %-28s  %-9s  %-6s  %-7s  %-7s  %-10s  %s\n", $1,$2,$3,$4,$5,$6,$7}' || true
+        fi
+      done || true
     fi
   } >> "$report_file"
 }
