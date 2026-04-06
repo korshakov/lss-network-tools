@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.224"
+APP_VERSION="v1.2.225"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -11174,6 +11174,58 @@ run_task_with_progress_output() {
   fi
 }
 
+show_multi_task_summary() {
+  local task_ids_str="$1"   # space-separated list of task IDs
+  local green='\033[0;32m'
+  local yellow='\033[1;33m'
+  local red='\033[0;31m'
+  local cyan='\033[0;36m'
+  local bold='\033[1m'
+  local reset='\033[0m'
+  local id title json_file status warn_count indicator
+
+  clear_screen_if_supported
+  echo
+  printf "  ${yellow}${bold}Multi-Task Run — Results Summary${reset}\n"
+  printf "  ${cyan}──────────────────────────────────────────────────${reset}\n"
+  echo
+
+  for id in $task_ids_str; do
+    title="$(task_title "$id")"
+    json_file="$(task_output_path "$id" 2>/dev/null || true)"
+    if [[ -f "$json_file" ]] && json_file_usable "$json_file"; then
+      status="$(    jq -r '.status   // "unknown"' "$json_file" 2>/dev/null)"
+      warn_count="$(jq -r '(.warnings // []) | length' "$json_file" 2>/dev/null)"
+      case "$status" in
+        success)
+          indicator="${green}✓${reset}"
+          ;;
+        completed_with_warnings)
+          indicator="${yellow}⚠${reset}"
+          ;;
+        failed)
+          indicator="${red}✗${reset}"
+          ;;
+        *)
+          indicator="${cyan}?${reset}"
+          ;;
+      esac
+      printf "  %b  ${bold}%-3s${reset}  %-38s  %s\n" \
+        "$indicator" "$id" "$title" "$status"
+      if [[ "$warn_count" -gt 0 ]]; then
+        jq -r '(.warnings // [])[] | "         ⚠  " + .' "$json_file" 2>/dev/null || true
+      fi
+    else
+      printf "  ${cyan}?${reset}  ${bold}%-3s${reset}  %-38s  no output\n" "$id" "$title"
+    fi
+  done
+
+  echo
+  printf "  ${cyan}──────────────────────────────────────────────────${reset}\n"
+  echo
+  read -r -p "  Press Enter to continue..." _
+}
+
 run_task_with_results_output() {
   local func_id="$1"
   local func_name="$2"
@@ -11307,19 +11359,13 @@ main_menu() {
             sleep 1
           else
             read -r -a _multi_id_arr <<< "$_multi_ids"
-            local _multi_last_idx=$(( ${#_multi_id_arr[@]} - 1 ))
-            local _multi_idx=0
             for _id in "${_multi_id_arr[@]}"; do
               _multi_title="$(task_title "$_id")"
               [[ -z "$_multi_title" ]] && _multi_title="Function $_id"
-              if [[ "$_multi_idx" -lt "$_multi_last_idx" ]]; then
-                run_task_with_results_output "$_id" "$_multi_title" "--no-pause" || true
-              else
-                run_task_with_results_output "$_id" "$_multi_title" || true
-              fi
+              run_task_with_results_output "$_id" "$_multi_title" "--no-pause" || true
               if [[ "${_GOTO_MAIN_MENU:-false}" == "true" ]]; then return 0; fi
-              _multi_idx=$(( _multi_idx + 1 ))
             done
+            show_multi_task_summary "$_multi_ids"
           fi
         else
           printf "  Invalid selection. Try again.\n"
