@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.243"
+APP_VERSION="v1.2.244"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -3027,29 +3027,34 @@ program_defaults_menu() {
 
     if [[ "$_has_defaults" == "false" ]]; then
       printf "  ${bold}1)${reset}  Setup Program Defaults\n"
+      printf "  ${bold}2)${reset}  View Program Defaults\n"
+      printf "  ${bold}3)${reset}  Edit Program Defaults\n"
+    else
+      printf "  ${bold}1)${reset}  View Program Defaults\n"
+      printf "  ${bold}2)${reset}  Edit Program Defaults\n"
     fi
-    printf "  ${bold}2)${reset}  View Program Defaults\n"
-    printf "  ${bold}3)${reset}  Edit Program Defaults\n"
     printf "  ${cyan}──────────────────────────────────────────────────${reset}\n"
     printf "  ${bold}0)${reset}  Back\n"
     echo
 
     local _choice
     read -r -p "  Choose option: " _choice
-    case "$_choice" in
-      1)
-        if [[ "$_has_defaults" == "false" ]]; then
-          _setup_program_defaults
-        else
-          printf "  Defaults already configured. Use option 3 to edit.\n"
-          sleep 1
-        fi
-        ;;
-      2) _view_program_defaults ;;
-      3) _edit_program_defaults ;;
-      0) return 0 ;;
-      *) printf "  Invalid selection.\n"; sleep 1 ;;
-    esac
+    if [[ "$_has_defaults" == "false" ]]; then
+      case "$_choice" in
+        1) _setup_program_defaults ;;
+        2) _view_program_defaults ;;
+        3) _edit_program_defaults ;;
+        0) return 0 ;;
+        *) printf "  Invalid selection.\n"; sleep 1 ;;
+      esac
+    else
+      case "$_choice" in
+        1) _view_program_defaults ;;
+        2) _edit_program_defaults ;;
+        0) return 0 ;;
+        *) printf "  Invalid selection.\n"; sleep 1 ;;
+      esac
+    fi
   done
 }
 
