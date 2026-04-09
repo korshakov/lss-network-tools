@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="lss-network-tools"
-APP_VERSION="v1.2.241"
+APP_VERSION="v1.2.242"
 APP_GITHUB_REPO="lssolutions-ie/lss-network-tools"
 APP_ROOT="$SCRIPT_DIR"
 DATA_ROOT="$SCRIPT_DIR"
@@ -1371,7 +1371,7 @@ initialize_run_context() {
 prompt_prepared_by() {
   local name=""
   echo
-  read -r -p "Prepared by (full name): " name
+  read -r -p "  Prepared by (full name): " name
   RUN_PREPARED_BY="${name:-}"
 }
 
@@ -1520,7 +1520,7 @@ build_report_for_current_run() {
   append_findings_summary "$report_file"
   append_remediation_hints "$report_file"
 
-  echo "Report built successfully: $report_file"
+  printf "  Report built successfully: %s\n" "$report_file"
 }
 
 default_report_export_dir() {
@@ -1659,7 +1659,7 @@ build_report_for_run_dir() {
     return 0
   fi
 
-  echo "TXT report:    $RUN_REPORT_FILE"
+  printf "  TXT report:    %s\n" "$RUN_REPORT_FILE"
   if [[ ! -f "$RUN_MANIFEST_FILE" ]]; then
     write_manifest_for_current_run || true
   fi
@@ -1679,7 +1679,7 @@ build_report_for_run_dir() {
   SELECTED_INTERFACE="$previous_selected_interface"
 
   echo
-  read -r -p "Press Enter to continue..." _
+  read -r -p "  Press Enter to continue..." _
 }
 
 list_all_run_dirs() {
@@ -3554,13 +3554,13 @@ generate_pdf_report() {
     return 0
   fi
 
-  echo "Generating PDF report..."
+  printf "  Generating PDF report...\n"
   local pdf_err
   pdf_err="$(python3 "$py_script" "$RUN_OUTPUT_DIR" "$APP_ROOT" "$pdf_path" "${RUN_PREPARED_BY:-}" 2>&1 >/dev/null || true)"
   if [[ -f "$pdf_path" ]]; then
-    echo "PDF report:    $pdf_path"
+    printf "  PDF report:    %s\n" "$pdf_path"
   else
-    echo "PDF generation failed${pdf_err:+: $pdf_err}"
+    printf "  PDF generation failed%s\n" "${pdf_err:+: $pdf_err}"
   fi
 }
 
